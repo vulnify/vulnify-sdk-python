@@ -14,12 +14,10 @@ Optional `content` is scanned for sensitive data. The content is not stored. Mat
 
 `base_url` defaults to `http://localhost:3000`. The production API is `https://api.vulnify.io`.
 
-This package is not published to PyPI yet. Install it from this repository.
-
 ## Install
 
 ```bash
-pip install "git+https://github.com/vulnify/vulnify-sdk-python.git"
+pip install vulnify
 ```
 
 ## Usage

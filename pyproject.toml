@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Vulnify SDK: ask Vulnify whether an AI agent action is allowed before running it."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
@@ -18,8 +19,8 @@ dev = ["pytest>=8"]
 Homepage = "https://github.com/vulnify/vulnify-sdk-python"
 Repository = "https://github.com/vulnify/vulnify-sdk-python"
 
-[tool.setuptools.packages.find]
-include = ["vulnify*"]
+[tool.setuptools]
+packages = ["vulnify"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

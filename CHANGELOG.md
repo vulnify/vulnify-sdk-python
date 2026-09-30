@@ -2,7 +2,7 @@
 
 ## 0.1.0
 
-Initial standalone release of the `vulnify` Python package.
+Initial standalone release of the `vulnify` Python package. Install with `pip install vulnify`.
 
 - Ask Vulnify for a runtime decision before an AI agent action runs: `ALLOW`, `REVIEW`, or `BLOCK`.
 - Fail closed by default when Vulnify cannot be reached.
