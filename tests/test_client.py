@@ -1,7 +1,9 @@
 import json
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest import mock
 
 from vulnify import Vulnify, VulnifyBlockedError, VulnifyError
 
@@ -103,6 +105,29 @@ class ClientTests(unittest.TestCase):
         r = Vulnify("k", base_url="http://127.0.0.1:1", timeout=0.2, retries=0).check(agent="A", action="READ_DATA", resource="R")
         self.assertTrue(r.degraded)
         self.assertEqual(r.decision, "BLOCK")
+
+    def test_fail_closed_does_not_run_the_export_without_network(self):
+        exported = []
+
+        def export_customer_records():
+            exported.append(True)
+
+        with mock.patch("vulnify.client.urllib.request.urlopen", side_effect=urllib.error.URLError("unreachable")):
+            decision = Vulnify("k", base_url="https://api.vulnify.io", timeout=0.2, retries=0).check(
+                agent="SalesBot",
+                action="EXPORT_DATA",
+                resource="Customer Database",
+                destination="EXTERNAL_EMAIL",
+                records_affected=12000,
+            )
+
+        self.assertEqual(decision.decision, "BLOCK")
+        self.assertTrue(decision.degraded)
+        self.assertIsNone(decision.id)
+        self.assertIn("fail_mode=closed", decision.reasons[0])
+        if decision.decision == "ALLOW":
+            export_customer_records()
+        self.assertEqual(exported, [])
 
     def test_protect_decorator(self):
         @self.v.protect(agent="A", action="READ_DATA", resource="R")
