@@ -104,7 +104,73 @@ Optional `content` is scanned for sensitive data and is not stored. Matches retu
 
 Audit events are hash-chained. SIEM export is JSON or CEF. Evidence in the product maps to LGPD, ISO/IEC 42001, NIST AI RMF, and the EU AI Act. That mapping is not a certification.
 
-`vulnify.adapters` guards CrewAI and LangGraph tools without importing either framework. Samples are in `examples/`.
+## Adapters
+
+`vulnify.adapters` is duck-typed and does not import a framework until an adapter needs a type from that package. The core install has no runtime dependencies. Samples are in `examples/`.
+
+CrewAI (`guard_crewai_tool`, `crewai_before_tool_call`) and LangGraph (`langgraph_tool_guard`, `alanggraph_tool_guard`) take a `describe` callback that maps tool arguments to `check` keywords. `on_blocked="message"` (the default for tool wrappers) returns Vulnify's reasons to the agent. `"raise"` raises `VulnifyBlockedError`.
+
+### LangChain
+
+```bash
+pip install 'vulnify[langchain]'
+```
+
+`guard_langchain_tool` guards `_run` / `_arun` on a `BaseTool`, so `invoke` checks once. A tool that only has `invoke` or `call` is guarded on those methods.
+
+```python
+from vulnify.adapters import guard_langchain_tool
+
+export_tool = guard_langchain_tool(vulnify, export_tool, describe_export)
+```
+
+### OpenAI Agents
+
+```bash
+pip install 'vulnify[openai-agents]'
+```
+
+`guard_openai_agents_tool` wraps a Python `FunctionTool`. `describe` sees the parsed JSON arguments. The model receives the block text instead of the tool running. `on_blocked="raise"` rethrows.
+
+```python
+from agents import function_tool
+
+from vulnify.adapters import guard_openai_agents_tool
+
+@function_tool
+def export_customers(rows: int) -> str:
+    """Export customer records."""
+    return f"exported {rows}"
+
+export_customers = guard_openai_agents_tool(vulnify, export_customers, describe_export)
+```
+
+### MCP
+
+```bash
+pip install 'vulnify[mcp]'
+```
+
+`guard_mcp_handler` wraps a tool function before you register it on `MCPServer` (mcp 2; the older name was FastMCP). `guard_mcp_client` wraps `session.call_tool`. A blocked call returns an MCP error result (`CallToolResult` when `mcp` is installed) and does not raise `VulnifyBlockedError`. Tools omitted from the client `describe` map are forwarded unchanged.
+
+```python
+from mcp.server import MCPServer
+
+from vulnify.adapters import guard_mcp_client, guard_mcp_handler
+
+async def export_customers(rows: int) -> str:
+    """Export customer records."""
+    return f"exported {rows}"
+
+server = MCPServer("sales")
+server.tool()(guard_mcp_handler(vulnify, describe_export, export_customers))
+
+session = guard_mcp_client(vulnify, session, {"export_customers": describe_export})
+```
+
+A `REVIEW` uses `final_decision` on every adapter: `ALLOW` runs the tool, and `BLOCK` does not.
+
+The npm SDK also ships a Vercel AI SDK helper. That framework has no Python counterpart, so this package does not include it.
 
 ## Development
 

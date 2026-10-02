@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- `guard_langchain_tool` guards a LangChain tool. Install the framework with `vulnify[langchain]`.
+- `guard_openai_agents_tool` guards an OpenAI Agents `FunctionTool` (`on_invoke_tool`) or a tool config with `execute`. Install the framework with `vulnify[openai-agents]`.
+- `guard_mcp_handler` guards an MCP server tool function, and `guard_mcp_client` guards `ClientSession.call_tool`. A blocked call returns an MCP error result. Install the SDK with `vulnify[mcp]`.
+- These adapters call `guard`, so a `REVIEW` follows `final_decision`: `ALLOW` runs the tool and `BLOCK` does not.
+- The core package still has no required dependencies. The frameworks are optional extras and are imported only when an adapter needs a type from that package.
+- The npm SDK's Vercel AI SDK helper is not ported. There is no Python counterpart.
+
 ## 0.2.1
 
 - Map optional `final_decision`. It is `REVIEW` while a review is pending, `ALLOW` after approval, and `BLOCK` after denial or expiry. The stored `decision` does not change. Idempotent replays of older decisions may omit `final_decision`.
