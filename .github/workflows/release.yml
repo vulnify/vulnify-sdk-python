@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install --upgrade pip build twine && python -m pip install -e ".[dev]"
+        run: python -m pip install --upgrade pip build twine && python -m pip install -e ".[dev,cli]"
       - name: Test
         run: pytest
       - name: Tag matches the package version
@@ -62,7 +62,16 @@ jobs:
               names = archived.getnames()
           if not any(name.endswith("py.typed") for name in names):
               raise SystemExit(f"py.typed missing from sdist: {names}")
-          print("py.typed is in the wheel and the sdist")
+          schema = "vulnify/schema/policies.v1.json"
+          with zipfile.ZipFile(wheels[0]) as zipped:
+              names = zipped.namelist()
+          if not any(name.endswith(schema) for name in names):
+              raise SystemExit(f"{schema} missing from wheel: {names}")
+          with tarfile.open(sdists[0]) as archived:
+              names = archived.getnames()
+          if not any(name.endswith(schema) for name in names):
+              raise SystemExit(f"{schema} missing from sdist: {names}")
+          print("py.typed and policies.v1.json are in the wheel and the sdist")
           PY
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.vulnify.io/schemas/policies.v1.json",
+  "title": "Vulnify policies as code",
+  "description": "Source of truth for Vulnify policy YAML. A file may contain several documents separated by ---. kind Policy is one rule. kind PolicyTest is a set of cases for POST /v1/policies/test. PolicySpec fields match the dashboard policy payload. The condition object matches the policy engine: it is not a comparison-object grammar.",
+  "oneOf": [
+    { "$ref": "#/$defs/policyDocument" },
+    { "$ref": "#/$defs/policyTestDocument" }
+  ],
+  "$defs": {
+    "policyDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "metadata", "spec"],
+      "properties": {
+        "apiVersion": { "const": "vulnify.io/v1" },
+        "kind": { "const": "Policy" },
+        "metadata": { "$ref": "#/$defs/policyMetadata" },
+        "spec": { "$ref": "#/$defs/policySpec" }
+      }
+    },
+    "policyMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Unique per organization. This is the PolicySpec name."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server id. Written by policies pull. Ignored by policies apply."
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server timestamp. Written by policies pull. Ignored by policies apply."
+        }
+      }
+    },
+    "policySpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "decision"],
+      "description": "PolicySpec minus name. name lives in metadata.name.",
+      "properties": {
+        "description": { "type": "string", "maxLength": 500 },
+        "enabled": { "type": "boolean", "default": true },
+        "action": { "$ref": "#/$defs/actionFamily" },
+        "resource": {
+          "description": "Resource type the rule applies to. Null and ANY match every type. The app stores a type code, not a resource name.",
+          "enum": ["ANY", "PUBLIC", "INTERNAL", "SENSITIVE", "CUSTOMER_PII", "FINANCIAL", "EMPLOYEE", null]
+        },
+        "condition": { "$ref": "#/$defs/condition" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "mode": { "enum": ["ENFORCE", "MONITOR"], "default": "ENFORCE" },
+        "approverRoles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["OWNER", "ADMIN", "MEMBER"] },
+          "description": "Who may approve when decision is REVIEW. Empty means owners and admins."
+        }
+      }
+    },
+    "actionFamily": {
+      "description": "Action family on the policy. A specific event action (READ_DATA, WRITE_DATA, DELETE_DATA, EXPORT_DATA, SEND_EMAIL) belongs in condition.action.",
+      "enum": ["ANY", "READ", "WRITE", "DELETE", "EXPORT"]
+    },
+    "decision": { "enum": ["ALLOW", "REVIEW", "BLOCK"] },
+    "eventAction": {
+      "enum": ["READ_DATA", "WRITE_DATA", "DELETE_DATA", "EXPORT_DATA", "SEND_EMAIL"]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Every field that is set must match. minRecords means the event recordsAffected is greater than or equal to the value (the app shows >=). maxRecords means recordsAffected is less than or equal to the value. More than 1000 records is minRecords 1001, not recordsAffected: { gt: 1000 }. destination EXTERNAL matches an external destination; INTERNAL matches an internal one. destinationContains is a substring of the destination. containsSensitiveData requires the resource to hold sensitive data. outsideBusinessHours is Monday-Friday 09:00-18:00 in the organization time zone, inverted. agentIds lists agent ids. allOf requires every nested condition. anyOf requires at least one nested condition. Groups may nest.",
+      "properties": {
+        "action": { "$ref": "#/$defs/eventAction" },
+        "destination": {
+          "description": "EXTERNAL matches EXTERNAL_EMAIL and EXTERNAL_API. INTERNAL matches INTERNAL.",
+          "enum": ["EXTERNAL", "INTERNAL"]
+        },
+        "destinationContains": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "containsSensitiveData": { "type": "boolean" },
+        "minRecords": { "type": "integer", "minimum": 0 },
+        "maxRecords": { "type": "integer", "minimum": 0 },
+        "minRiskScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "outsideBusinessHours": { "type": "boolean" },
+        "agentIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+          }
+        },
+        "allOf": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/condition" }
+        },
+        "anyOf": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/condition" }
+        }
+      }
+    },
+    "policyTestDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "metadata", "cases"],
+      "properties": {
+        "apiVersion": { "const": "vulnify.io/v1" },
+        "kind": { "const": "PolicyTest" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 120 }
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/policyTestCase" }
+        }
+      }
+    },
+    "policyTestCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "input"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "input": { "$ref": "#/$defs/policyTestInput" },
+        "expect": { "$ref": "#/$defs/policyTestExpect" }
+      }
+    },
+    "policyTestInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "action", "resource"],
+      "description": "Event fields for POST /v1/policies/test. action is an event action. resource is the resource name registered in Vulnify, not the policy resource type.",
+      "properties": {
+        "agent": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "action": { "$ref": "#/$defs/eventAction" },
+        "resource": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "destination": { "enum": ["INTERNAL", "EXTERNAL_EMAIL", "EXTERNAL_API"] },
+        "recordsAffected": { "type": "integer", "minimum": 0, "maximum": 100000000 },
+        "containsSensitiveData": { "type": "boolean" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "policyTestExpect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision"],
+      "properties": {
+        "decision": { "$ref": "#/$defs/decision" },
+        "policy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Expected matched policy name."
+        }
+      }
+    }
+  }
+}
