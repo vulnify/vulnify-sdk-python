@@ -4,7 +4,7 @@ Runtime authorization for AI agents. Before the agent exports or sends customer 
 
 Vulnify sees action metadata — agent, action, resource, destination, and record count — not the records. In monitor mode the event is stored and not enforced: obey `final_decision` when it is present, otherwise `decision`. `evaluated_decision` is what enforcement would have returned, and `monitored` is `True`. If Vulnify cannot be reached, the default is fail-closed.
 
-Standard library only. Python 3.9+.
+The core install is the standard library only. Python 3.9+. The CLI is the `vulnify[cli]` extra.
 
 Production API: https://api.vulnify.io
 
@@ -14,7 +14,10 @@ Documentation: https://docs.vulnify.io
 
 ```bash
 pip install vulnify
+pip install "vulnify[cli]"
 ```
+
+The second command installs the `vulnify` console script. The core package does not depend on it.
 
 ## Production scenario
 
@@ -195,10 +198,48 @@ if event.type in ("BLOCK", "REVIEW", "CRITICAL"):
 
 Flask uses `request.get_data()`, FastAPI uses `await request.body()`, and Django uses `request.body`. Short samples are in `examples/flask_webhook.py`, `examples/fastapi_webhook.py`, and `examples/django_webhook.py`.
 
+## CLI
+
+`pip install "vulnify[cli]"` adds the `vulnify` command. It is the same command set as the npm CLI: `init`, `login`, `check`, `policies validate`, `policies pull`, `policies apply`, and `test`. There is no telemetry.
+
+Credentials are written to `~/.config/vulnify/credentials.json` with mode 0600. `VULNIFY_API_KEY` and `VULNIFY_BASE_URL` override that file. The default base URL is `https://api.vulnify.io`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Success, or `ALLOW` from `check` |
+| 1 | Validation error, test failure, or another command failure |
+| 2 | `REVIEW` from `check` |
+| 3 | `BLOCK` from `check` |
+| 4 | This server has no policies-as-code API yet |
+| 5 | Authentication error |
+
+```bash
+vulnify init
+vulnify login --api-key "$VULNIFY_API_KEY"
+vulnify check --agent support-bot --action EXPORT_DATA --resource customers-db --records 5000
+vulnify policies validate
+vulnify policies pull --out vulnify/policies
+vulnify policies apply --dry-run
+vulnify policies apply --prune
+vulnify test --local
+```
+
+Every command accepts `--json`. `vulnify --version` prints the package version. `check` prints a warning on stderr when the key starts with `vln_live_`, because that call records a real event. `--destination` and `--records` map to the decision API. `--sensitive` is accepted so the flags match the npm CLI; the decision API has no boolean for it, and the CLI warns that the flag is not sent. `check` exits from `finalDecision` when the API sends it, and from `decision` otherwise. An unreachable API is exit 1 (`failMode=closed`), not exit 3.
+
+`login` checks the key with `GET /v1/events/00000000-0000-4000-8000-000000000000`. HTTP 200, 403, or 404 means the key was accepted. HTTP 401 is exit 5. A 404 whose message starts with `Cannot GET` means that base URL has no decision API and is exit 1. The credentials directory is mode 0700.
+
+`policies pull`, `policies apply`, and `test` call `/v1/policies`, `/v1/policies/apply`, and `/v1/policies/test`. A 404 prints exactly `This Vulnify server does not support policies as code yet` and exits 4. Apply with anything other than an org-wide LIVE key is rejected by the API; the CLI exits 5. `pull` writes one file per policy, keeps `metadata.id` and `metadata.updatedAt`, and `apply` does not send those fields back.
+
+`init` writes `vulnify/policies/example.yaml`, `vulnify/tests/example.test.yaml`, and `vulnify/.gitignore`, and refuses to overwrite any of them. Several documents may share a file, separated by `---`. `policies validate` is offline and reports `file:line` errors against `vulnify/schema/policies.v1.json`, which is a byte-identical copy of `schema/policies.v1.json` from the npm SDK.
+
+A policy `action` is the action family: `ANY`, `READ`, `WRITE`, `DELETE`, or `EXPORT`. `resource` is a resource type (`ANY`, `PUBLIC`, `INTERNAL`, `SENSITIVE`, `CUSTOMER_PII`, `FINANCIAL`, `EMPLOYEE`) or null. A condition uses the dashboard fields: `minRecords` and `maxRecords` are inclusive bounds on `recordsAffected` (`minRecords: 1001` is more than 1000 records), plus `destination` (`EXTERNAL` or `INTERNAL`), `destinationContains`, `containsSensitiveData`, `minRiskScore`, `outsideBusinessHours`, `agentIds`, and grouped `allOf` / `anyOf`. `kind: PolicyTest` cases use the event action (`EXPORT_DATA` and the rest) and a resource name.
+
+`vulnify test --local` sends the cases plus the Policy documents in `vulnify/policies`. Without `--local`, only the cases are sent. `pass: true` is PASS, `pass: null` is SKIP, and any other `pass` value is FAIL. The exit code is 1 when any case fails.
+
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,cli]"
 pytest
 ```
 

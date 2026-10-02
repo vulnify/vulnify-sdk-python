@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- `vulnify` console script, installed with `pip install "vulnify[cli]"` (PyYAML and jsonschema). The core install still has no required dependencies. Python 3.9+.
+- Commands match the npm CLI: `init`, `login`, `check`, `policies validate`, `policies pull`, `policies apply`, and `test`. Every command accepts `--json`.
+- Credentials are stored in `~/.config/vulnify/credentials.json` with mode 0600. `VULNIFY_API_KEY` and `VULNIFY_BASE_URL` take precedence over that file.
+- Exit codes: 0 ok or ALLOW, 1 failure, 2 REVIEW, 3 BLOCK, 4 the server has no policies-as-code API, 5 authentication error.
+- `policies pull`, `policies apply`, and `test` print `This Vulnify server does not support policies as code yet` and exit 4 when the server returns 404.
+- Policy YAML is checked against `vulnify/schema/policies.v1.json`, a byte-identical copy of `schema/policies.v1.json` on `vulnify-sdk` main. CI fetches that file and fails if the bytes differ.
+- `spec.action` is the action family (`EXPORT`, not `EXPORT_DATA`). Conditions use `minRecords` (`recordsAffected >= n`; more than 1000 records is `minRecords: 1001`) and `allOf` / `anyOf`.
+- `init` also writes `vulnify/.gitignore`. `check` follows `finalDecision`. `login` probes `GET /v1/events/00000000-0000-4000-8000-000000000000` and treats HTTP 403 as a successful probe. `policies pull` keeps `id` and `updatedAt`. `test --local` loads policies from `vulnify/policies`.
+
 ## 0.3.1
 
 - `parse_webhook` accepts a TEST `eventId` that starts with `test-`. The value is its own id, not `test-` plus the delivery id.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vulnify"
-version = "0.3.1"
+version = "0.4.0"
 description = "Vulnify SDK: ask Vulnify whether an AI agent action is allowed before running it."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,11 +37,16 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "PyYAML>=6", "jsonschema>=4.18"]
+# PyYAML and jsonschema are only required for the console script.
+cli = ["PyYAML>=6", "jsonschema>=4.18"]
 # Framework packages are optional. The adapters stay duck-typed and import them lazily.
 langchain = ["langchain-core>=0.3; python_version>='3.10'"]
 openai-agents = ["openai-agents>=0.2; python_version>='3.10'"]
 mcp = ["mcp>=1; python_version>='3.10'"]
+
+[project.scripts]
+vulnify = "vulnify.cli:console_main"
 
 [project.urls]
 Homepage = "https://docs.vulnify.io"
@@ -49,10 +54,12 @@ Source = "https://github.com/vulnify/vulnify-sdk-python"
 Issues = "https://github.com/vulnify/vulnify-sdk-python/issues"
 
 [tool.setuptools]
-packages = ["vulnify"]
+packages = ["vulnify", "vulnify.schema"]
+include-package-data = true
 
 [tool.setuptools.package-data]
 vulnify = ["py.typed"]
+"vulnify.schema" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
