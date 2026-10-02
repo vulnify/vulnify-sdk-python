@@ -8,6 +8,9 @@
 - These adapters call `guard`, so a `REVIEW` follows `final_decision`: `ALLOW` runs the tool and `BLOCK` does not.
 - The core package still has no required dependencies. The frameworks are optional extras and are imported only when an adapter needs a type from that package.
 - The npm SDK's Vercel AI SDK helper is not ported. There is no Python counterpart.
+- `verify_webhook_signature` checks `X-Vulnify-Signature` over the raw body. The key is the `whsec_` secret as UTF-8. A timestamp 300 seconds away is still accepted, and any matching `v1` value is enough. Failure raises `WebhookVerificationError`.
+- `parse_webhook` and `construct_webhook` turn a delivery into a decision, anomaly, or test dataclass. Decision payloads include `decision` and `final_decision`, and every delivery includes `event_id`.
+- `construct_webhook_from_request` reads the signature header for Flask, FastAPI, and Django. Samples are in `examples/`. The core package still has no required dependencies.
 
 ## 0.2.1
 
