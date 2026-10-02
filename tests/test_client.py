@@ -8,7 +8,7 @@ from unittest import mock
 
 from vulnify import Vulnify, VulnifyBlockedError, VulnifyError
 
-STATE = {"calls": [], "reply": None, "status": 200, "review_statuses": []}
+STATE = {"calls": [], "reply": None, "status": 200, "review_statuses": [], "final_decisions": []}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -35,7 +35,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(STATE["status"], STATE["reply"] if isinstance(STATE["reply"], dict) else {})
             return
         status = STATE["review_statuses"].pop(0) if STATE["review_statuses"] else "PENDING"
-        self._send(200, {**STATE["reply"], "review": {"status": status}})
+        body = {**STATE["reply"], "review": {"status": status}}
+        if STATE["final_decisions"]:
+            body["finalDecision"] = STATE["final_decisions"].pop(0)
+        self._send(200, body)
 
 
 def decision(d, **extra):
@@ -55,7 +58,7 @@ class ClientTests(unittest.TestCase):
         cls.server.shutdown()
 
     def setUp(self):
-        STATE.update(calls=[], status=200, reply=decision("ALLOW"), review_statuses=[])
+        STATE.update(calls=[], status=200, reply=decision("ALLOW"), review_statuses=[], final_decisions=[])
         self.v = Vulnify("vln_live_x", base_url=self.url, timeout=2, retries=0)
 
     def test_default_base_url_is_production_and_stays_overridable(self):
@@ -190,18 +193,71 @@ class ClientTests(unittest.TestCase):
         self.assertIn("property extra should not exist; action must be a valid enum", text)
         self.assertNotIn("['property extra", text)
 
-    def test_resolved_review_keeps_decision_review(self):
+    def test_final_decision_is_mapped_and_optional(self):
+        STATE["reply"] = decision(
+            "ALLOW",
+            finalDecision="ALLOW",
+            quotaExceeded=True,
+            sandbox=True,
+            lgpdCategories=["IDENTIFICATION"],
+        )
+        checked = self.v.check(agent="A", action="READ_DATA", resource="R")
+        self.assertEqual(checked.final_decision, "ALLOW")
+        self.assertTrue(checked.quota_exceeded)
+        self.assertTrue(checked.sandbox)
+        self.assertEqual(checked.lgpd_categories, ["IDENTIFICATION"])
+
+        STATE["reply"] = decision("REVIEW", quotaExceeded=False, sandbox=True, lgpdCategories=["FINANCIAL"])
+        STATE["review_statuses"] = ["APPROVED"]
+        STATE["final_decisions"] = ["ALLOW"]
+        read = self.v.get_event("evt-1")
+        self.assertEqual(read.decision, "REVIEW")
+        self.assertEqual(read.final_decision, "ALLOW")
+        self.assertFalse(read.quota_exceeded)
+        self.assertTrue(read.sandbox)
+        self.assertEqual(read.lgpd_categories, ["FINANCIAL"])
+        self.assertEqual(read.review["status"], "APPROVED")
+
         STATE["reply"] = decision("REVIEW")
-        STATE["review_statuses"] = ["APPROVED"]
-        result = self.v.get_event("evt-1")
-        self.assertEqual(result.decision, "REVIEW")
-        self.assertEqual(result.review["status"], "APPROVED")
-        # A test key must not be turned into sandbox=True when GET omits the field.
-        STATE["review_statuses"] = ["APPROVED"]
-        omitted = Vulnify("vln_test_x", base_url=self.url, retries=0).get_event("evt-1")
-        self.assertIs(omitted.sandbox, False)
-        self.assertIs(omitted.quota_exceeded, False)
-        self.assertEqual(omitted.decision, "REVIEW")
+        STATE["review_statuses"] = ["PENDING"]
+        replay = Vulnify("vln_test_x", base_url=self.url, retries=0).get_event("evt-1")
+        self.assertIsNone(replay.final_decision)
+        self.assertIs(replay.sandbox, False)
+        self.assertEqual(replay.decision, "REVIEW")
+
+    def test_wait_and_guard_follow_final_decision(self):
+        STATE["reply"] = decision("REVIEW", finalDecision="REVIEW")
+        STATE["final_decisions"] = ["REVIEW", "ALLOW"]
+        self.assertEqual(
+            self.v.guard(lambda: "sent", wait={"timeout": 5, "poll": 0.01}, agent="A", action="SEND_EMAIL", resource="R"),
+            "sent",
+        )
+
+        STATE.update(calls=[], final_decisions=[], review_statuses=["PENDING"])
+        STATE["reply"] = decision("REVIEW", finalDecision="ALLOW")
+        self.assertEqual(self.v.wait_for_review("evt-1", timeout=5, poll=0.01), "ALLOW")
+
+        STATE.update(calls=[], final_decisions=["BLOCK"], review_statuses=["DENIED"])
+        STATE["reply"] = decision("REVIEW", finalDecision="REVIEW")
+        with self.assertRaises(VulnifyBlockedError):
+            self.v.guard(lambda: "sent", wait={"timeout": 5, "poll": 0.01}, agent="A", action="SEND_EMAIL", resource="R")
+        STATE.update(final_decisions=[], review_statuses=["EXPIRED"])
+        STATE["reply"] = decision("REVIEW", finalDecision="BLOCK")
+        self.assertEqual(self.v.wait_for_review("evt-1", timeout=5, poll=0.01), "BLOCK")
+
+        # finalDecision REVIEW keeps waiting even if the review status is already APPROVED.
+        STATE.update(calls=[], final_decisions=["REVIEW"], review_statuses=["APPROVED"])
+        STATE["reply"] = decision("REVIEW", finalDecision="REVIEW")
+        self.assertEqual(self.v.wait_for_review("evt-1", timeout=0.05, poll=0.02), "TIMEOUT")
+
+        # An approved replay can already be ALLOW, so guard does not need to poll.
+        STATE["reply"] = decision("REVIEW", finalDecision="ALLOW")
+        self.assertEqual(self.v.guard(lambda: "sent", agent="A", action="SEND_EMAIL", resource="R"), "sent")
+        STATE["reply"] = decision("REVIEW", finalDecision="BLOCK", reasons=["denied"])
+        ran = []
+        with self.assertRaises(VulnifyBlockedError):
+            self.v.guard(lambda: ran.append(1), wait={"timeout": 5, "poll": 0.01}, agent="A", action="SEND_EMAIL", resource="R")
+        self.assertEqual(ran, [])
 
     def test_get_event_retries_transient_failures_then_raises_vulnify_error(self):
         STATE["status"] = 503

@@ -38,21 +38,25 @@ class VulnifyBlockedError(Exception):
 
 @dataclass
 class Decision:
-    """A decision from check() or a later read of that event.
+    """A decision from check() or get_event(). POST and GET return the same body.
 
-    ``decision`` is ``ALLOW``, ``REVIEW``, or ``BLOCK``. Resolving a review does not
-    change it: the value stays ``REVIEW``. The signal to run the action is
-    ``review["status"] == "APPROVED"``. ``DENIED`` and ``EXPIRED`` mean do not run it.
-    ``guard(..., wait=)`` already follows that status.
+    ``decision`` is the outcome stored on the event (``ALLOW``, ``REVIEW``, or ``BLOCK``).
+    It does not change when a human resolves a review.
 
-    ``GET /v1/events/{id}`` currently omits ``quotaExceeded`` and ``sandbox`` (an API
-    gap). This client does not fill them in. When those keys are absent,
-    ``quota_exceeded`` and ``sandbox`` stay at the dataclass default ``False``, which
-    is not a value the GET returned. ``check()`` responses include both fields.
+    ``final_decision`` is the outcome to obey. It matches ``decision`` when there is no
+    review. While a review is pending it is ``REVIEW``. Approval sets it to ``ALLOW``.
+    Denial or expiry sets it to ``BLOCK``. Idempotent replays of decisions made before
+    that field shipped may omit it; then it is ``None``, and a review is approved only
+    when ``review["status"]`` is ``APPROVED``.
+
+    ``evaluated_decision`` is what full enforcement would have decided. In monitor mode
+    it can differ from ``decision``. ``quota_exceeded`` and ``sandbox`` come back on
+    both POST and GET.
     """
 
     id: Optional[str]
-    decision: str  # ALLOW | REVIEW | BLOCK. Stays REVIEW after the review is resolved.
+    decision: str  # Stored outcome. Does not change when a review is resolved.
+    final_decision: Optional[str] = None  # Effective outcome. None when the API omitted it.
     evaluated_decision: str = "ALLOW"  # what would happen with full enforcement (differs in monitor mode)
     monitored: bool = False
     risk_level: Optional[str] = None
@@ -61,9 +65,9 @@ class Decision:
     policy: Optional[Dict[str, str]] = None
     dlp_findings: List[str] = field(default_factory=list)
     lgpd_categories: List[str] = field(default_factory=list)
-    review: Optional[Dict[str, Any]] = None  # status PENDING | APPROVED | DENIED | EXPIRED. APPROVED is the go signal.
-    quota_exceeded: bool = False  # On check() responses. GET omits it; False is then only the default.
-    sandbox: bool = False  # On check() responses. GET omits it; False is then only the default.
+    review: Optional[Dict[str, Any]] = None  # status PENDING | APPROVED | DENIED | EXPIRED
+    quota_exceeded: bool = False
+    sandbox: bool = False
     degraded: bool = False  # True when Vulnify was unreachable and fail_mode was applied
 
     @classmethod
@@ -71,6 +75,7 @@ class Decision:
         return cls(
             id=body.get("id"),
             decision=body["decision"],
+            final_decision=body.get("finalDecision"),
             evaluated_decision=body.get("evaluatedDecision", body["decision"]),
             monitored=bool(body.get("monitored", False)),
             risk_level=body.get("riskLevel"),
@@ -83,6 +88,22 @@ class Decision:
             quota_exceeded=bool(body.get("quotaExceeded", False)),
             sandbox=bool(body.get("sandbox", False)),
         )
+
+    def review_outcome(self) -> Optional[str]:
+        """Terminal review signal, or None while the review is still pending.
+
+        When ``final_decision`` is present, ``ALLOW`` and ``BLOCK`` are terminal and
+        ``REVIEW`` means keep waiting. When it was omitted, ``APPROVED``, ``DENIED``,
+        and ``EXPIRED`` from ``review["status"]`` are terminal.
+        """
+        if self.final_decision is not None:
+            if self.final_decision == "REVIEW":
+                return None
+            return self.final_decision
+        status = (self.review or {}).get("status", "PENDING")
+        if status in (None, "PENDING"):
+            return None
+        return status
 
 
 class Vulnify:
@@ -187,11 +208,11 @@ class Vulnify:
             return self._fallback(str(err))
 
     def get_event(self, event_id: str) -> Decision:
-        """Read one event. ``decision`` stays REVIEW after the review is resolved; see Decision.
+        """Read one event. The body matches check(), including final_decision.
 
         Retries transient failures the same way as check(). When retries are exhausted,
-        raises VulnifyError. Does not apply fail_mode. The GET response omits
-        quotaExceeded and sandbox; those Decision fields are then only defaults.
+        raises VulnifyError. Does not apply fail_mode. After a review, obey
+        ``final_decision`` (ALLOW, BLOCK, or still REVIEW).
         """
         try:
             body = self._with_retries("GET", f"/v1/events/{event_id}")
@@ -200,35 +221,38 @@ class Vulnify:
         return Decision.from_api(body)
 
     def wait_for_review(self, event_id: str, timeout: float = 300.0, poll: float = 2.0) -> str:
-        """Poll until the review is APPROVED, DENIED, or EXPIRED.
+        """Poll until the review has an effective outcome, or return ``TIMEOUT``.
 
-        Returns that status, or 'TIMEOUT' if nobody answers in time. The event's
-        ``decision`` stays REVIEW the whole time; APPROVED is the status that means
-        the action may run. A transient failure while polling raises VulnifyError
-        after the same retries as check().
+        When the API sends ``final_decision``, that field wins: ``ALLOW`` means the
+        action may run, ``BLOCK`` means it must not, and ``REVIEW`` keeps polling.
+        When ``final_decision`` is missing, polling stops on review status
+        ``APPROVED``, ``DENIED``, or ``EXPIRED``. A transient failure raises
+        VulnifyError after the same retries as check().
         """
         deadline = time.monotonic() + timeout
         while True:
-            review = self.get_event(event_id).review or {}
-            status = review.get("status", "PENDING")
-            if status != "PENDING":
-                return status
+            outcome = self.get_event(event_id).review_outcome()
+            if outcome is not None:
+                return outcome
             if time.monotonic() + poll > deadline:
                 return "TIMEOUT"
             time.sleep(poll)
 
     def guard(self, fn: Callable[[], T], wait: Optional[dict] = None, **action: Any) -> T:
-        """Run fn only if allowed.
+        """Run fn only if the effective decision is ALLOW.
 
-        BLOCK raises. REVIEW raises unless ``wait={'timeout': 300}`` and the review
-        status becomes APPROVED. Approval does not change ``decision`` away from REVIEW.
+        ``final_decision`` is that outcome when the API sent it; otherwise ``decision``
+        is. BLOCK raises. REVIEW raises unless ``wait={'timeout': 300}`` and the review
+        then resolves to ``final_decision`` ALLOW, or to review status APPROVED when
+        ``final_decision`` was omitted.
         """
         result = self.check(**action)
-        if result.decision == "ALLOW":
+        effective = result.final_decision if result.final_decision is not None else result.decision
+        if effective == "ALLOW":
             return fn()
-        if result.decision == "REVIEW" and wait is not None and result.id:
+        if effective == "REVIEW" and wait is not None and result.id:
             outcome = self.wait_for_review(result.id, **wait)
-            if outcome == "APPROVED":
+            if outcome in ("ALLOW", "APPROVED"):
                 return fn()
             result.reasons.append(f"Review {outcome.lower()}")
         raise VulnifyBlockedError(result)

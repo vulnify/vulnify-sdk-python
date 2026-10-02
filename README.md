@@ -2,7 +2,7 @@
 
 Runtime authorization for AI agents. Before the agent exports or sends customer records, your app asks Vulnify. The decision is `ALLOW`, `REVIEW`, or `BLOCK`. The score is an integer from 0 to 100 and comes back with reasons.
 
-Vulnify sees action metadata — agent, action, resource, destination, and record count — not the records. In monitor mode the event is stored and not enforced: obey `decision`. `evaluated_decision` is what enforcement would have returned, and `monitored` is `True`. If Vulnify cannot be reached, the default is fail-closed.
+Vulnify sees action metadata — agent, action, resource, destination, and record count — not the records. In monitor mode the event is stored and not enforced: obey `final_decision` when it is present, otherwise `decision`. `evaluated_decision` is what enforcement would have returned, and `monitored` is `True`. If Vulnify cannot be reached, the default is fail-closed.
 
 Standard library only. Python 3.9+.
 
@@ -84,17 +84,17 @@ if __name__ == "__main__":
 
 A `REVIEW` is approved on the Vulnify server (Slack, an MFA step-up, or a separate approver). This process does not approve it and does not poll. A separate MCP or HTTP gateway injects secrets only after `ALLOW`.
 
-`guard(fn, **action)` runs `fn` only for `ALLOW` and raises `VulnifyBlockedError` for `REVIEW` and `BLOCK`. Pass `wait={"timeout": 300}` only when you mean to poll until someone approves. Approval is `review` status `APPROVED` while `decision` remains `REVIEW`. `protect(**action)` is the same check as a decorator. Retries reuse the same `Idempotency-Key`, so a retry does not create a second event. `get_event` and `wait_for_review` use those same retries; if the API is still unavailable they raise `VulnifyError` instead of applying `fail_mode`.
+`guard(fn, **action)` runs `fn` only when the effective decision is `ALLOW` and raises `VulnifyBlockedError` for `REVIEW` and `BLOCK`. That effective value is `final_decision` when the API sent it, and `decision` otherwise. Pass `wait={"timeout": 300}` only when you mean to poll until a review resolves. `protect(**action)` is the same check as a decorator. Retries reuse the same `Idempotency-Key`, so a retry does not create a second event. `get_event` and `wait_for_review` use those same retries; if the API is still unavailable they raise `VulnifyError` instead of applying `fail_mode`.
 
 ## Decisions
 
 - `ALLOW` — run the action. `risk_score` is 0–100. `reasons` explains the score.
-- `REVIEW` — do not run the action yet. `review["status"]` starts as `PENDING`. Tell the caller a human must approve. When the review is resolved, `decision` stays `REVIEW`. The go signal is `review["status"] == "APPROVED"`. `DENIED` and `EXPIRED` mean the action must not run. A later `get_event` does not turn an approval into `decision="ALLOW"`.
+- `REVIEW` — do not run the action yet. `review["status"]` starts as `PENDING`. Tell the caller a human must approve.
 - `BLOCK` — do not run the action.
 
-Follow `decision` in monitor mode as well. An invalid API key, an unknown agent or resource, a rejected payload, or a body the API refuses as too large (`413`) raises `VulnifyError`. The same is true of any other HTTP 4xx except `408` and `429`. `fail_mode="open"` does not swallow those errors and does not retry them.
+`decision` is the outcome stored on the event. It does not change when a review is resolved. `final_decision` is the field to obey after a review: `REVIEW` while it is pending, `ALLOW` when a human approves, and `BLOCK` when they deny it or it expires. `get_event` returns the same body as `check()`, including `final_decision`, `quota_exceeded`, `sandbox`, and `lgpd_categories`. An idempotent replay of a decision made before `finalDecision` shipped can omit it (`final_decision is None`). `wait_for_review` and `guard(..., wait=)` then treat review status `APPROVED` as the go signal, and `DENIED` or `EXPIRED` as a block.
 
-`get_event` reads `GET /v1/events/{id}`. That response currently omits `quotaExceeded` and `sandbox`. The SDK does not invent them: `quota_exceeded` and `sandbox` stay at the default `False`, which is not a value the GET returned. `check()` includes both fields.
+Follow `final_decision` in monitor mode when it is present, otherwise `decision`. An invalid API key, an unknown agent or resource, a rejected payload, or a body the API refuses as too large (`413`) raises `VulnifyError`. The same is true of any other HTTP 4xx except `408` and `429`. `fail_mode="open"` does not swallow those errors and does not retry them.
 
 Optional `content` is scanned for sensitive data and is not stored. Matches return on `dlp_findings`.
 

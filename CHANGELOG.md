@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Map optional `final_decision`. It is `REVIEW` while a review is pending, `ALLOW` after approval, and `BLOCK` after denial or expiry. The stored `decision` does not change. Idempotent replays of older decisions may omit `final_decision`.
+- `wait_for_review` and `guard(..., wait=)` follow `final_decision` when it is present, and review status `APPROVED` when it is not.
+- `GET /v1/events/{id}` returns the same decision body as `check()`, including `quota_exceeded`, `sandbox`, `lgpd_categories`, and `final_decision`.
+
 ## 0.2.0
 
 - Default `base_url` is `https://api.vulnify.io`. Override it with the `base_url` argument or with `VULNIFY_BASE_URL` (local API: `http://localhost:3000`). An explicit `base_url` wins over the environment variable.
