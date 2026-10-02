@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import unittest
 import urllib.error
@@ -30,6 +31,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         STATE["calls"].append({"path": self.path, "headers": dict(self.headers)})
+        if STATE["status"] != 200:
+            self._send(STATE["status"], STATE["reply"] if isinstance(STATE["reply"], dict) else {})
+            return
         status = STATE["review_statuses"].pop(0) if STATE["review_statuses"] else "PENDING"
         self._send(200, {**STATE["reply"], "review": {"status": status}})
 
@@ -53,6 +57,16 @@ class ClientTests(unittest.TestCase):
     def setUp(self):
         STATE.update(calls=[], status=200, reply=decision("ALLOW"), review_statuses=[])
         self.v = Vulnify("vln_live_x", base_url=self.url, timeout=2, retries=0)
+
+    def test_default_base_url_is_production_and_stays_overridable(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VULNIFY_BASE_URL", None)
+            self.assertEqual(Vulnify("k").base_url, "https://api.vulnify.io")
+        with mock.patch.dict(os.environ, {"VULNIFY_BASE_URL": "http://localhost:3000/"}):
+            self.assertEqual(Vulnify("k").base_url, "http://localhost:3000")
+            self.assertEqual(Vulnify("k", base_url="https://api.vulnify.io/").base_url, "https://api.vulnify.io")
+        with self.assertRaises(ValueError):
+            Vulnify("k", base_url="  ")
 
     def test_check_sends_key_payload_and_idempotency_key(self):
         r = self.v.check(agent="SalesBot", action="EXPORT_DATA", resource="Customer Database", records_affected=12)
@@ -128,6 +142,102 @@ class ClientTests(unittest.TestCase):
         if decision.decision == "ALLOW":
             export_customer_records()
         self.assertEqual(exported, [])
+
+    def test_payload_too_large_raises_and_is_not_retried_or_failed_open(self):
+        STATE["status"] = 413
+        STATE["reply"] = {"statusCode": 413, "message": "request entity too large"}
+        client = Vulnify("k", base_url=self.url, fail_mode="open", retries=2)
+        with mock.patch("vulnify.client.time.sleep") as sleep:
+            with self.assertRaises(VulnifyError) as ctx:
+                client.check(agent="A", action="EXPORT_DATA", content="x" * 20)
+        self.assertIn("413", str(ctx.exception))
+        self.assertIn("request entity too large", str(ctx.exception))
+        self.assertEqual(len(STATE["calls"]), 1)
+        sleep.assert_not_called()
+        self.assertIs(type(ctx.exception), VulnifyError)
+
+    def test_other_non_retryable_4xx_raise_while_408_and_429_stay_retryable(self):
+        STATE["status"] = 422
+        STATE["reply"] = {"message": "Unprocessable"}
+        with mock.patch("vulnify.client.time.sleep") as sleep:
+            with self.assertRaises(VulnifyError) as ctx:
+                Vulnify("k", base_url=self.url, fail_mode="open", retries=2).check(agent="A", action="READ_DATA", resource="R")
+        self.assertIn("422", str(ctx.exception))
+        self.assertEqual(len(STATE["calls"]), 1)
+        sleep.assert_not_called()
+
+        STATE.update(calls=[], status=408, reply={})
+        with mock.patch("vulnify.client.time.sleep") as sleep:
+            opened = Vulnify("k", base_url=self.url, fail_mode="open", retries=1).check(agent="A", action="READ_DATA", resource="R")
+        self.assertEqual((opened.decision, opened.degraded), ("ALLOW", True))
+        self.assertEqual(len(STATE["calls"]), 2)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.05])
+
+        STATE.update(calls=[], status=429, reply={"message": "Too Many Requests"})
+        with mock.patch("vulnify.client.time.sleep") as sleep:
+            closed = Vulnify("k", base_url=self.url, retries=2).check(agent="A", action="READ_DATA", resource="R")
+        self.assertEqual((closed.decision, closed.degraded), ("BLOCK", True))
+        self.assertEqual(len(STATE["calls"]), 3)
+        self.assertEqual(len({c["headers"]["Idempotency-Key"] for c in STATE["calls"]}), 1)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.05, 0.1])
+
+    def test_validation_messages_are_joined(self):
+        STATE["status"] = 400
+        STATE["reply"] = {"message": ["property extra should not exist", "action must be a valid enum"]}
+        with self.assertRaises(VulnifyError) as ctx:
+            self.v.check(agent="A", action="EXPORT_DATA", resource="R")
+        text = str(ctx.exception)
+        self.assertIn("property extra should not exist; action must be a valid enum", text)
+        self.assertNotIn("['property extra", text)
+
+    def test_resolved_review_keeps_decision_review(self):
+        STATE["reply"] = decision("REVIEW")
+        STATE["review_statuses"] = ["APPROVED"]
+        result = self.v.get_event("evt-1")
+        self.assertEqual(result.decision, "REVIEW")
+        self.assertEqual(result.review["status"], "APPROVED")
+        # A test key must not be turned into sandbox=True when GET omits the field.
+        STATE["review_statuses"] = ["APPROVED"]
+        omitted = Vulnify("vln_test_x", base_url=self.url, retries=0).get_event("evt-1")
+        self.assertIs(omitted.sandbox, False)
+        self.assertIs(omitted.quota_exceeded, False)
+        self.assertEqual(omitted.decision, "REVIEW")
+
+    def test_get_event_retries_transient_failures_then_raises_vulnify_error(self):
+        STATE["status"] = 503
+        STATE["reply"] = {}
+        with mock.patch("vulnify.client.time.sleep") as sleep:
+            with self.assertRaises(VulnifyError) as ctx:
+                Vulnify("k", base_url=self.url, fail_mode="open", retries=2).get_event("evt-1")
+        self.assertIs(type(ctx.exception), VulnifyError)
+        self.assertIsNone(ctx.exception.__cause__)
+        self.assertIn("503", str(ctx.exception))
+        self.assertIn("unavailable", str(ctx.exception))
+        self.assertEqual(len(STATE["calls"]), 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.05, 0.1])
+
+        STATE.update(calls=[], status=429, reply={"message": "Too Many Requests"})
+        with mock.patch("vulnify.client.time.sleep"):
+            with self.assertRaises(VulnifyError) as ctx:
+                Vulnify("k", base_url=self.url, fail_mode="open", retries=1).wait_for_review("evt-1", timeout=5, poll=0.01)
+        self.assertIn("429", str(ctx.exception))
+        self.assertEqual(len(STATE["calls"]), 2)
+
+        STATE.update(calls=[], status=404, reply={"message": "Event not found"})
+        with self.assertRaises(VulnifyError) as ctx:
+            Vulnify("k", base_url=self.url, retries=2).get_event("missing")
+        self.assertIn("Event not found", str(ctx.exception))
+        self.assertEqual(len(STATE["calls"]), 1)
+
+    def test_get_event_network_error_raises_vulnify_error(self):
+        with mock.patch("vulnify.client.urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+            with mock.patch("vulnify.client.time.sleep") as sleep:
+                with self.assertRaises(VulnifyError) as ctx:
+                    Vulnify("k", base_url="http://127.0.0.1:9", retries=1, timeout=0.2).get_event("evt-1")
+        self.assertIs(type(ctx.exception), VulnifyError)
+        self.assertIn("unavailable", str(ctx.exception))
+        self.assertIn("down", str(ctx.exception))
+        self.assertEqual(sleep.call_count, 1)
 
     def test_protect_decorator(self):
         @self.v.protect(agent="A", action="READ_DATA", resource="R")

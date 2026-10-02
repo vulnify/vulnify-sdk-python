@@ -5,6 +5,7 @@ Standard library only (urllib), Python 3.9+.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -14,9 +15,16 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
 
+# Public API. Override with the base_url argument or VULNIFY_BASE_URL (local: http://localhost:3000).
+DEFAULT_BASE_URL = "https://api.vulnify.io"
+
 
 class VulnifyError(Exception):
-    """Configuration or request error (bad API key, unknown agent, invalid payload). Never silenced by fail_mode."""
+    """Configuration or request error (bad API key, unknown agent, invalid or oversized payload).
+
+    Raised for non-retryable HTTP 4xx, including 413. Never silenced by fail_mode.
+    Also raised when get_event or wait_for_review exhaust retries on a transient failure.
+    """
 
 
 class VulnifyBlockedError(Exception):
@@ -30,8 +38,21 @@ class VulnifyBlockedError(Exception):
 
 @dataclass
 class Decision:
+    """A decision from check() or a later read of that event.
+
+    ``decision`` is ``ALLOW``, ``REVIEW``, or ``BLOCK``. Resolving a review does not
+    change it: the value stays ``REVIEW``. The signal to run the action is
+    ``review["status"] == "APPROVED"``. ``DENIED`` and ``EXPIRED`` mean do not run it.
+    ``guard(..., wait=)`` already follows that status.
+
+    ``GET /v1/events/{id}`` currently omits ``quotaExceeded`` and ``sandbox`` (an API
+    gap). This client does not fill them in. When those keys are absent,
+    ``quota_exceeded`` and ``sandbox`` stay at the dataclass default ``False``, which
+    is not a value the GET returned. ``check()`` responses include both fields.
+    """
+
     id: Optional[str]
-    decision: str  # ALLOW | REVIEW | BLOCK: what you must obey
+    decision: str  # ALLOW | REVIEW | BLOCK. Stays REVIEW after the review is resolved.
     evaluated_decision: str = "ALLOW"  # what would happen with full enforcement (differs in monitor mode)
     monitored: bool = False
     risk_level: Optional[str] = None
@@ -40,9 +61,9 @@ class Decision:
     policy: Optional[Dict[str, str]] = None
     dlp_findings: List[str] = field(default_factory=list)
     lgpd_categories: List[str] = field(default_factory=list)
-    review: Optional[Dict[str, Any]] = None
-    quota_exceeded: bool = False
-    sandbox: bool = False
+    review: Optional[Dict[str, Any]] = None  # status PENDING | APPROVED | DENIED | EXPIRED. APPROVED is the go signal.
+    quota_exceeded: bool = False  # On check() responses. GET omits it; False is then only the default.
+    sandbox: bool = False  # On check() responses. GET omits it; False is then only the default.
     degraded: bool = False  # True when Vulnify was unreachable and fail_mode was applied
 
     @classmethod
@@ -67,14 +88,23 @@ class Decision:
 class Vulnify:
     """Client for the Vulnify ingestion API.
 
+    base_url defaults to https://api.vulnify.io. Pass base_url to point at another host.
+    When base_url is omitted, VULNIFY_BASE_URL is used if it is set. An explicit base_url
+    wins over the environment variable. For a local API use http://localhost:3000.
+
     fail_mode: 'closed' (default) blocks when Vulnify is unreachable; 'open' allows.
-    retries: network retries reusing the same Idempotency-Key (never creates duplicate events).
+    It applies only to check(), and only after retries of a network error, 408, 429, or 5xx.
+    Non-retryable 4xx (400, 401, 403, 404, 413, and any other 4xx except 408 and 429)
+    raise VulnifyError immediately, including when fail_mode is 'open'.
+    retries: those transient failures are retried with the same Idempotency-Key on check()
+    (a retry never creates a second event), with a short backoff between attempts.
+    get_event() uses the same retries and then raises VulnifyError. It does not use fail_mode.
     """
 
     def __init__(
         self,
         api_key: str,
-        base_url: str = "http://localhost:3000",
+        base_url: Optional[str] = None,
         timeout: float = 3.0,
         fail_mode: str = "closed",
         retries: int = 2,
@@ -83,6 +113,12 @@ class Vulnify:
             raise ValueError("Vulnify: api_key is required")
         if fail_mode not in ("open", "closed"):
             raise ValueError("fail_mode must be 'open' or 'closed'")
+        if base_url is None:
+            base_url = os.environ.get("VULNIFY_BASE_URL", "").strip() or DEFAULT_BASE_URL
+        else:
+            base_url = base_url.strip()
+            if not base_url:
+                raise ValueError("Vulnify: base_url is required")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -101,15 +137,26 @@ class Vulnify:
                 return json.loads(res.read().decode() or "{}")
         except urllib.error.HTTPError as err:
             payload = err.read().decode()
-            if err.code in (400, 401, 403, 404):
-                try:
-                    message = json.loads(payload).get("message", payload)
-                except ValueError:
-                    message = payload
-                raise VulnifyError(f"Vulnify request rejected ({err.code}): {message}") from None
+            # 408 and 429 are transient. Every other 4xx is the caller's request, including
+            # 413 (body over the API's 200kb limit): retrying it cannot succeed, and fail_mode
+            # must not turn it into an ALLOW.
+            if 400 <= err.code < 500 and err.code not in (408, 429):
+                raise VulnifyError(f"Vulnify request rejected ({err.code}): {_error_text(payload)}") from None
             raise _Transient(f"Vulnify responded {err.code}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as err:
             raise _Transient(str(err)) from None
+
+    def _with_retries(self, method: str, path: str, body: Optional[dict] = None, idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+        """Retry network errors, 408, 429, and 5xx. Client errors propagate immediately."""
+        last: BaseException = _Transient("network error")
+        for attempt in range(self.retries + 1):
+            try:
+                return self._request(method, path, body, idempotency_key)
+            except _Transient as err:
+                last = err
+                if attempt < self.retries:
+                    time.sleep(_retry_delay(attempt))
+        raise last
 
     # ------------------------------------------------------------------ API
     def check(
@@ -124,26 +171,42 @@ class Vulnify:
         resource_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Decision:
-        """Ask for a decision. Network problems never raise: see fail_mode."""
+        """Ask for a decision. Transient failures never raise: see fail_mode.
+
+        A non-retryable 4xx, including 413, raises VulnifyError instead.
+        """
         payload = {
             "agent": agent, "agentId": agent_id, "action": action, "resource": resource, "resourceId": resource_id,
             "destination": destination, "recordsAffected": records_affected, "content": content,
         }
         payload = {k: v for k, v in payload.items() if v is not None}
         key = idempotency_key or str(uuid.uuid4())
-        last = "network error"
-        for _ in range(self.retries + 1):
-            try:
-                return Decision.from_api(self._request("POST", "/v1/events", payload, key))
-            except _Transient as err:
-                last = str(err)
-        return self._fallback(last)
+        try:
+            return Decision.from_api(self._with_retries("POST", "/v1/events", payload, key))
+        except _Transient as err:
+            return self._fallback(str(err))
 
     def get_event(self, event_id: str) -> Decision:
-        return Decision.from_api(self._request("GET", f"/v1/events/{event_id}"))
+        """Read one event. ``decision`` stays REVIEW after the review is resolved; see Decision.
+
+        Retries transient failures the same way as check(). When retries are exhausted,
+        raises VulnifyError. Does not apply fail_mode. The GET response omits
+        quotaExceeded and sandbox; those Decision fields are then only defaults.
+        """
+        try:
+            body = self._with_retries("GET", f"/v1/events/{event_id}")
+        except _Transient as err:
+            raise VulnifyError(f"Vulnify unavailable ({err})") from None
+        return Decision.from_api(body)
 
     def wait_for_review(self, event_id: str, timeout: float = 300.0, poll: float = 2.0) -> str:
-        """Polls until APPROVED, DENIED or EXPIRED; returns 'TIMEOUT' if nobody answers in time."""
+        """Poll until the review is APPROVED, DENIED, or EXPIRED.
+
+        Returns that status, or 'TIMEOUT' if nobody answers in time. The event's
+        ``decision`` stays REVIEW the whole time; APPROVED is the status that means
+        the action may run. A transient failure while polling raises VulnifyError
+        after the same retries as check().
+        """
         deadline = time.monotonic() + timeout
         while True:
             review = self.get_event(event_id).review or {}
@@ -155,7 +218,11 @@ class Vulnify:
             time.sleep(poll)
 
     def guard(self, fn: Callable[[], T], wait: Optional[dict] = None, **action: Any) -> T:
-        """Run fn only if allowed. BLOCK raises; REVIEW raises unless `wait={'timeout': 300}` and it is approved."""
+        """Run fn only if allowed.
+
+        BLOCK raises. REVIEW raises unless ``wait={'timeout': 300}`` and the review
+        status becomes APPROVED. Approval does not change ``decision`` away from REVIEW.
+        """
         result = self.check(**action)
         if result.decision == "ALLOW":
             return fn()
@@ -188,4 +255,22 @@ class Vulnify:
 
 
 class _Transient(Exception):
-    """Network problem or 5xx: retried, then handled by fail_mode."""
+    """Network problem, 408, 429, or 5xx. Retried, then handled by the caller. Not part of the public API."""
+
+
+def _retry_delay(attempt: int) -> float:
+    """Seconds to wait after failed attempt ``attempt`` (0-based) before trying again."""
+    return min(0.05 * (2 ** attempt), 0.5)
+
+
+def _error_text(payload: str) -> str:
+    """Turn an error body into one line. Validation ``message`` arrays are joined, not repr'd."""
+    try:
+        message = json.loads(payload).get("message", payload)
+    except ValueError:
+        return payload
+    if isinstance(message, list):
+        return "; ".join(str(item) for item in message)
+    if message is None:
+        return payload
+    return str(message)

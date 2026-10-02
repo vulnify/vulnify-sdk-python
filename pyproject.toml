@@ -4,23 +4,51 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vulnify"
-version = "0.1.1"
+version = "0.2.0"
 description = "Vulnify SDK: ask Vulnify whether an AI agent action is allowed before running it."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
+keywords = [
+    "vulnify",
+    "authorization",
+    "ai-agents",
+    "security",
+    "runtime-security",
+    "policy",
+    "dlp",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
 [project.urls]
-Homepage = "https://github.com/vulnify/vulnify-sdk-python"
-Repository = "https://github.com/vulnify/vulnify-sdk-python"
+Homepage = "https://docs.vulnify.io"
+Source = "https://github.com/vulnify/vulnify-sdk-python"
+Issues = "https://github.com/vulnify/vulnify-sdk-python/issues"
 
 [tool.setuptools]
 packages = ["vulnify"]
+
+[tool.setuptools.package-data]
+vulnify = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

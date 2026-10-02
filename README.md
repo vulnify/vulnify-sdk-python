@@ -8,6 +8,8 @@ Standard library only. Python 3.9+.
 
 Production API: https://api.vulnify.io
 
+Documentation: https://docs.vulnify.io
+
 ## Install
 
 ```bash
@@ -23,7 +25,7 @@ An agent is about to export customer records to an external destination. Call `c
 - `BLOCK` does not run the export.
 - If Vulnify cannot be reached, `check()` returns `BLOCK` with `degraded=True`. The export does not run.
 
-Set `VULNIFY_API_KEY`. `VULNIFY_BASE_URL` overrides the host; when it is unset this example uses `https://api.vulnify.io`. Omitting `base_url` in the constructor falls back to `http://localhost:3000`.
+Set `VULNIFY_API_KEY`. With no `base_url`, this calls `https://api.vulnify.io`. For a local API, set `VULNIFY_BASE_URL=http://localhost:3000` or pass `base_url="http://localhost:3000"`. An explicit `base_url` wins over `VULNIFY_BASE_URL`.
 
 ```python
 import os
@@ -42,10 +44,8 @@ def main() -> None:
     if not api_key:
         raise SystemExit("Set VULNIFY_API_KEY")
 
-    vulnify = Vulnify(
-        api_key=api_key,
-        base_url=os.environ.get("VULNIFY_BASE_URL", "https://api.vulnify.io"),
-    )
+    # Local API: Vulnify(api_key=api_key, base_url="http://localhost:3000")
+    vulnify = Vulnify(api_key=api_key)
 
     decision = vulnify.check(
         agent="SalesBot",
@@ -84,21 +84,23 @@ if __name__ == "__main__":
 
 A `REVIEW` is approved on the Vulnify server (Slack, an MFA step-up, or a separate approver). This process does not approve it and does not poll. A separate MCP or HTTP gateway injects secrets only after `ALLOW`.
 
-`guard(fn, **action)` runs `fn` only for `ALLOW` and raises `VulnifyBlockedError` for `REVIEW` and `BLOCK`. Pass `wait={"timeout": 300}` only when you mean to poll until someone approves. `protect(**action)` is the same check as a decorator. Retries reuse the same `Idempotency-Key`, so a retry does not create a second event.
+`guard(fn, **action)` runs `fn` only for `ALLOW` and raises `VulnifyBlockedError` for `REVIEW` and `BLOCK`. Pass `wait={"timeout": 300}` only when you mean to poll until someone approves. Approval is `review` status `APPROVED` while `decision` remains `REVIEW`. `protect(**action)` is the same check as a decorator. Retries reuse the same `Idempotency-Key`, so a retry does not create a second event. `get_event` and `wait_for_review` use those same retries; if the API is still unavailable they raise `VulnifyError` instead of applying `fail_mode`.
 
 ## Decisions
 
 - `ALLOW` — run the action. `risk_score` is 0–100. `reasons` explains the score.
-- `REVIEW` — do not run the action. `review["status"]` starts as `PENDING`. Tell the caller a human must approve.
+- `REVIEW` — do not run the action yet. `review["status"]` starts as `PENDING`. Tell the caller a human must approve. When the review is resolved, `decision` stays `REVIEW`. The go signal is `review["status"] == "APPROVED"`. `DENIED` and `EXPIRED` mean the action must not run. A later `get_event` does not turn an approval into `decision="ALLOW"`.
 - `BLOCK` — do not run the action.
 
-Follow `decision` in monitor mode as well. An invalid API key, an unknown agent or resource, or a rejected payload raises `VulnifyError`. `fail_mode="open"` does not swallow those errors.
+Follow `decision` in monitor mode as well. An invalid API key, an unknown agent or resource, a rejected payload, or a body the API refuses as too large (`413`) raises `VulnifyError`. The same is true of any other HTTP 4xx except `408` and `429`. `fail_mode="open"` does not swallow those errors and does not retry them.
+
+`get_event` reads `GET /v1/events/{id}`. That response currently omits `quotaExceeded` and `sandbox`. The SDK does not invent them: `quota_exceeded` and `sandbox` stay at the default `False`, which is not a value the GET returned. `check()` includes both fields.
 
 Optional `content` is scanned for sensitive data and is not stored. Matches return on `dlp_findings`.
 
 ## Fail-closed
 
-`fail_mode` defaults to `"closed"`. A timeout or a network error becomes `decision="BLOCK"`, `degraded=True`, and a reason beginning with `Vulnify unavailable`. The scenario above does not call `export_customer_records()`. Set `fail_mode="open"` only when an outage should let the action through.
+`fail_mode` defaults to `"closed"`. A timeout, a network error, `408`, `429`, or a `5xx` becomes `decision="BLOCK"`, `degraded=True`, and a reason beginning with `Vulnify unavailable`. The scenario above does not call `export_customer_records()`. Set `fail_mode="open"` only when an outage should let the action through. A `413` or any other non-retryable `4xx` never takes that path.
 
 Audit events are hash-chained. SIEM export is JSON or CEF. Evidence in the product maps to LGPD, ISO/IEC 42001, NIST AI RMF, and the EU AI Act. That mapping is not a certification.
 
