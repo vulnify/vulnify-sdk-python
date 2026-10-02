@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- `parse_webhook` accepts a TEST `eventId` that starts with `test-`. The value is its own id, not `test-` plus the delivery id.
+
 ## 0.3.0
 
 - `guard_langchain_tool` guards a LangChain tool. Install the framework with `vulnify[langchain]`.
