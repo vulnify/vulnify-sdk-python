@@ -172,6 +172,29 @@ A `REVIEW` uses `final_decision` on every adapter: `ALLOW` runs the tool, and `B
 
 The npm SDK also ships a Vercel AI SDK helper. That framework has no Python counterpart, so this package does not include it.
 
+## Webhooks
+
+Vulnify signs each delivery with HMAC-SHA256. The key is the endpoint secret as UTF-8, including the `whsec_` prefix. It is not base64-decoded. The signed message is the unix timestamp, a dot, and the raw body bytes. `X-Vulnify-Signature` looks like `t=<unix seconds>,v1=<hex>`. During a secret rotation the header can carry more than one `v1`; any match is enough. A timestamp exactly 300 seconds off is still valid. Pass the raw body, not JSON you parsed and dumped again.
+
+`X-Vulnify-Delivery` is the delivery id (`event.id`). Dedupe retries on it. `X-Vulnify-Attempt` starts at 1. `X-Vulnify-Event` is the primary type and matches `event.type`. Those three headers are not signed. Trust the body after the signature check.
+
+```python
+from vulnify import WebhookVerificationError, construct_webhook_from_request
+
+try:
+    event = construct_webhook_from_request(secret, headers, raw_body)
+except WebhookVerificationError:
+    return 400  # 408, 429, and 5xx are retried; any other 4xx stops them
+
+# event.id is the delivery id. event.event_id is the security event, anomaly, or test id.
+if event.type in ("BLOCK", "REVIEW", "CRITICAL"):
+    obey = event.data.final_decision  # ALLOW, REVIEW, or BLOCK
+```
+
+`verify_webhook_signature(secret, signature_header, raw_body)` only checks the signature and raises `WebhookVerificationError`. `parse_webhook(raw_body)` returns a `DecisionWebhook`, `AnomalyWebhook`, or `TestWebhook`. `construct_webhook` does both. `decision` on a decision payload is what was stored. `final_decision` is the outcome to obey.
+
+Flask uses `request.get_data()`, FastAPI uses `await request.body()`, and Django uses `request.body`. Short samples are in `examples/flask_webhook.py`, `examples/fastapi_webhook.py`, and `examples/django_webhook.py`.
+
 ## Development
 
 ```bash
