@@ -172,6 +172,28 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parsed_test.event_id, "test-" + DELIVERY)
         self.assertEqual(parsed_test.data.webhook_id, EVENT)
 
+    def test_accepts_a_test_event_id_that_is_not_the_delivery_id(self):
+        other = "99999999-9999-4999-8999-999999999999"
+        test = {
+            "id": DELIVERY,
+            "type": "TEST",
+            "types": ["TEST"],
+            "eventId": "test-" + other,
+            "createdAt": "2026-10-02T20:00:00Z",
+            "data": {
+                "message": "Test event from Vulnify",
+                "webhookId": EVENT,
+                "organizationId": EVENT,
+            },
+        }
+        parsed = parse_webhook(json.dumps(test).encode("utf-8"))
+        self.assertEqual(parsed.id, DELIVERY)
+        self.assertEqual(parsed.event_id, "test-" + other)
+        test["eventId"] = other
+        with self.assertRaises(WebhookPayloadError) as raised:
+            parse_webhook(json.dumps(test).encode("utf-8"))
+        self.assertIn("test-", str(raised.exception))
+
     def test_rejects_a_decision_that_omits_final_decision(self):
         raw = json.loads(decision_body().decode("utf-8"))
         del raw["data"]["finalDecision"]

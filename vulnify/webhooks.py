@@ -95,7 +95,7 @@ class AnomalyWebhook:
 
 @dataclass(frozen=True)
 class TestWebhook:
-    """A ``test`` delivery. ``event_id`` is ``test-`` plus the delivery id. This is not a security decision."""
+    """A ``test`` delivery. ``event_id`` starts with ``test-`` and is not the delivery id. This is not a security decision."""
 
     id: str
     type: str
@@ -177,8 +177,8 @@ def parse_webhook(raw_body: Union[bytes, bytearray, str]) -> WebhookEvent:
             raise WebhookPayloadError("Webhook eventId must match data.id")
         return AnomalyWebhook(delivery_id, event_type, types, event_id, created_at, parsed_anomaly)
     if event_type == TEST_TYPE:
-        if event_id != "test-" + delivery_id:
-            raise WebhookPayloadError("Test eventId must be test- followed by the delivery id")
+        if not event_id.startswith("test-"):
+            raise WebhookPayloadError("Test eventId must start with test-")
         return TestWebhook(delivery_id, event_type, types, event_id, created_at, _test_data(data))
     raise WebhookPayloadError("Unknown webhook type: " + event_type)
 

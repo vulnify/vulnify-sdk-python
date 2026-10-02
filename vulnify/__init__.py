@@ -34,4 +34,4 @@ __all__ = [
     "construct_webhook_from_request",
     "header_value",
 ]
-__version__ = "0.3.0"
+__version__ = "0.3.1"
