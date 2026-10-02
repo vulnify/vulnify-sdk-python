@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+
+- Default `base_url` is `https://api.vulnify.io`. Override it with the `base_url` argument or with `VULNIFY_BASE_URL` (local API: `http://localhost:3000`). An explicit `base_url` wins over the environment variable.
+- Publish metadata for the public package: Homepage `https://docs.vulnify.io`, Source, Issues, classifiers, and keywords. The wheel and sdist include `py.typed`.
+
 ## 0.1.1
 
 - Document a production export check a caller can copy: `ALLOW` runs the export, `REVIEW` stops and asks for a human, and `BLOCK` or an unreachable API does not run it.

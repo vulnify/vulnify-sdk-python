@@ -1,3 +1,4 @@
+include vulnify/py.typed
 prune tests
 prune examples
 prune .github

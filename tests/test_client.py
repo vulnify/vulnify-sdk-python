@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import unittest
 import urllib.error
@@ -53,6 +54,16 @@ class ClientTests(unittest.TestCase):
     def setUp(self):
         STATE.update(calls=[], status=200, reply=decision("ALLOW"), review_statuses=[])
         self.v = Vulnify("vln_live_x", base_url=self.url, timeout=2, retries=0)
+
+    def test_default_base_url_is_production_and_stays_overridable(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VULNIFY_BASE_URL", None)
+            self.assertEqual(Vulnify("k").base_url, "https://api.vulnify.io")
+        with mock.patch.dict(os.environ, {"VULNIFY_BASE_URL": "http://localhost:3000/"}):
+            self.assertEqual(Vulnify("k").base_url, "http://localhost:3000")
+            self.assertEqual(Vulnify("k", base_url="https://api.vulnify.io/").base_url, "https://api.vulnify.io")
+        with self.assertRaises(ValueError):
+            Vulnify("k", base_url="  ")
 
     def test_check_sends_key_payload_and_idempotency_key(self):
         r = self.v.check(agent="SalesBot", action="EXPORT_DATA", resource="Customer Database", records_affected=12)

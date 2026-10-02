@@ -13,7 +13,8 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from vulnify import Vulnify
 from vulnify.adapters import langgraph_tool_guard
 
-vulnify = Vulnify(api_key=os.environ["VULNIFY_API_KEY"], base_url=os.environ.get("VULNIFY_URL", "http://localhost:3000"))
+# Production API by default. Local: VULNIFY_BASE_URL=http://localhost:3000
+vulnify = Vulnify(api_key=os.environ["VULNIFY_API_KEY"])
 
 
 @tool

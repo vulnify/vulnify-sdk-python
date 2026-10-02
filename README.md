@@ -8,6 +8,8 @@ Standard library only. Python 3.9+.
 
 Production API: https://api.vulnify.io
 
+Documentation: https://docs.vulnify.io
+
 ## Install
 
 ```bash
@@ -23,7 +25,7 @@ An agent is about to export customer records to an external destination. Call `c
 - `BLOCK` does not run the export.
 - If Vulnify cannot be reached, `check()` returns `BLOCK` with `degraded=True`. The export does not run.
 
-Set `VULNIFY_API_KEY`. `VULNIFY_BASE_URL` overrides the host; when it is unset this example uses `https://api.vulnify.io`. Omitting `base_url` in the constructor falls back to `http://localhost:3000`.
+Set `VULNIFY_API_KEY`. With no `base_url`, this calls `https://api.vulnify.io`. For a local API, set `VULNIFY_BASE_URL=http://localhost:3000` or pass `base_url="http://localhost:3000"`. An explicit `base_url` wins over `VULNIFY_BASE_URL`.
 
 ```python
 import os
@@ -42,10 +44,8 @@ def main() -> None:
     if not api_key:
         raise SystemExit("Set VULNIFY_API_KEY")
 
-    vulnify = Vulnify(
-        api_key=api_key,
-        base_url=os.environ.get("VULNIFY_BASE_URL", "https://api.vulnify.io"),
-    )
+    # Local API: Vulnify(api_key=api_key, base_url="http://localhost:3000")
+    vulnify = Vulnify(api_key=api_key)
 
     decision = vulnify.check(
         agent="SalesBot",

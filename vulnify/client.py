@@ -5,6 +5,7 @@ Standard library only (urllib), Python 3.9+.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
+
+# Public API. Override with the base_url argument or VULNIFY_BASE_URL (local: http://localhost:3000).
+DEFAULT_BASE_URL = "https://api.vulnify.io"
 
 
 class VulnifyError(Exception):
@@ -67,6 +71,10 @@ class Decision:
 class Vulnify:
     """Client for the Vulnify ingestion API.
 
+    base_url defaults to https://api.vulnify.io. Pass base_url to point at another host.
+    When base_url is omitted, VULNIFY_BASE_URL is used if it is set. An explicit base_url
+    wins over the environment variable. For a local API use http://localhost:3000.
+
     fail_mode: 'closed' (default) blocks when Vulnify is unreachable; 'open' allows.
     retries: network retries reusing the same Idempotency-Key (never creates duplicate events).
     """
@@ -74,7 +82,7 @@ class Vulnify:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "http://localhost:3000",
+        base_url: Optional[str] = None,
         timeout: float = 3.0,
         fail_mode: str = "closed",
         retries: int = 2,
@@ -83,6 +91,12 @@ class Vulnify:
             raise ValueError("Vulnify: api_key is required")
         if fail_mode not in ("open", "closed"):
             raise ValueError("fail_mode must be 'open' or 'closed'")
+        if base_url is None:
+            base_url = os.environ.get("VULNIFY_BASE_URL", "").strip() or DEFAULT_BASE_URL
+        else:
+            base_url = base_url.strip()
+            if not base_url:
+                raise ValueError("Vulnify: base_url is required")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
