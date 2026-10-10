@@ -140,7 +140,7 @@ Roll out without blocking anything: in monitor mode the action is allowed and re
 
 ### Audit log
 
-Every decision, including human reviews, is appended to a per-organization SHA-256 hash chain that you can verify from the dashboard. Owners and admins can download recent security events from Compliance as a JSON or CSV file. See [Audit log](https://docs.vulnify.io/concepts/audit-log/).
+Every decision, including human reviews, is appended to a per-organization SHA-256 hash chain that you can verify from the dashboard. Evidence and audit exports are a JSON or CSV download that includes a SHA-256 checksum. Settings has "SIEM export: JSON or CEF lines". See [Audit log](https://docs.vulnify.io/concepts/audit-log/).
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/audit-logs.jpg" alt="Vulnify audit log listing decisions by agent, action, resource, destination, risk, and decision" width="100%">
@@ -355,7 +355,7 @@ The SDK is MIT-licensed. Usage limits, retention, and features depend on your Vu
 
 ## Security
 
-Please report vulnerabilities privately to [security@vulnify.io](mailto:security@vulnify.io), not in a public issue. See [Security and compliance](https://docs.vulnify.io/security/) for what Vulnify stores and how.
+Report vulnerabilities to [security@vulnify.io](mailto:security@vulnify.io). See the [disclosure policy](https://www.vulnify.io/disclosure).
 
 ## Development
 
