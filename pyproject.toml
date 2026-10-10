@@ -13,11 +13,18 @@ license-files = ["LICENSE"]
 keywords = [
     "vulnify",
     "authorization",
-    "ai-agents",
-    "security",
     "runtime-security",
+    "security",
+    "ai-agents",
+    "agent-security",
+    "guardrails",
+    "human-in-the-loop",
     "policy",
+    "policy-as-code",
     "dlp",
+    "crewai",
+    "langgraph",
+    "langchain",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

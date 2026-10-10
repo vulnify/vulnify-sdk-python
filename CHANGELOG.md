@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- PyPI keywords updated.
+
 ## 0.4.2
 
 - README and PyPI page updates (MCP docs and npx, security contact, export wording, finalDecision wording), with no behavior changes.
