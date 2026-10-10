@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- README and PyPI page refresh, no code changes. Screenshots live in `docs/assets/` and are not in the sdist or wheel.
+- Project URLs now list Homepage, Documentation, Changelog, Source, Issues, and Dashboard. The README is declared as `text/markdown`.
+
 ## 0.4.0
 
 - `vulnify` console script, installed with `pip install "vulnify[cli]"` (PyYAML and jsonschema). The core install still has no required dependencies. Python 3.9+.

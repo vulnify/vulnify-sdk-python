@@ -1,143 +1,247 @@
-# vulnify
+<p align="center">
+  <a href="https://vulnify.io">
+    <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/banner.png" alt="Vulnify: decide every AI agent action before it runs" width="100%">
+  </a>
+</p>
 
-Runtime authorization for AI agents. Before the agent exports or sends customer records, your app asks Vulnify. The decision is `ALLOW`, `REVIEW`, or `BLOCK`. The score is an integer from 0 to 100 and comes back with reasons.
+<h1 align="center">Vulnify Python SDK</h1>
 
-Vulnify sees action metadata — agent, action, resource, destination, and record count — not the records. In monitor mode the event is stored and not enforced: obey `final_decision` when it is present, otherwise `decision`. `evaluated_decision` is what enforcement would have returned, and `monitored` is `True`. If Vulnify cannot be reached, the default is fail-closed.
+<p align="center">
+  <strong>Ask Vulnify before your AI agent acts. Get <code>ALLOW</code>, <code>REVIEW</code>, or <code>BLOCK</code>, with a risk score and the reasons.</strong>
+</p>
 
-The core install is the standard library only. Python 3.9+. The CLI is the `vulnify[cli]` extra.
+<p align="center">
+  <a href="https://pypi.org/project/vulnify/"><img src="https://img.shields.io/pypi/v/vulnify?color=3D6DFF&label=pypi" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/vulnify/"><img src="https://img.shields.io/pypi/pyversions/vulnify?color=3D6DFF" alt="Python versions"></a>
+  <a href="https://pypistats.org/packages/vulnify"><img src="https://img.shields.io/pypi/dm/vulnify?color=3D6DFF" alt="Downloads"></a>
+  <a href="https://github.com/vulnify/vulnify-sdk-python/blob/main/LICENSE"><img src="https://img.shields.io/pypi/l/vulnify?color=3D6DFF" alt="License: MIT"></a>
+  <a href="https://github.com/vulnify/vulnify-sdk-python/actions/workflows/ci.yml"><img src="https://github.com/vulnify/vulnify-sdk-python/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+</p>
 
-Production API: https://api.vulnify.io
+<p align="center">
+  <a href="https://docs.vulnify.io/sdks/python/"><strong>Docs</strong></a> ·
+  <a href="https://app.vulnify.io"><strong>Dashboard</strong></a> ·
+  <a href="https://github.com/vulnify/vulnify-sdk-python#vulnify-mcp-server"><strong>MCP</strong></a> ·
+  <a href="https://github.com/vulnify/vulnify-sdk-python/blob/main/CHANGELOG.md"><strong>Changelog</strong></a>
+</p>
 
-Documentation: https://docs.vulnify.io
+---
 
-## Install
+Vulnify is runtime authorization for AI agents. Before an agent reads, writes, deletes, exports, or emails data, your code sends Vulnify the action metadata (agent, action, resource, destination, record count). Vulnify answers with a decision, a 0 to 100 risk score, and the reasons, and writes the decision to your audit log. Vulnify sees the metadata, not the records.
+
+- **Zero dependencies.** The core package uses only the standard library. Python 3.9+.
+- **Fail-closed by default.** If Vulnify cannot be reached, the action is blocked unless you opt into `fail_mode="open"`.
+- **Human review built in.** `REVIEW` holds the action until a person approves or denies it.
+- **Framework adapters** for LangChain, LangGraph, CrewAI, OpenAI Agents, and MCP, plus webhook verification and a policies-as-code CLI.
+
+## Quickstart
+
+**1. Install**
 
 ```bash
 pip install vulnify
-pip install "vulnify[cli]"
 ```
 
-The second command installs the `vulnify` console script. The core package does not depend on it.
+**2. Create an API key** in the [dashboard](https://app.vulnify.io) (a TEST key is fine to start) and export it:
 
-## Production scenario
+```bash
+export VULNIFY_API_KEY="..."
+```
 
-An agent is about to export customer records to an external destination. Call `check()` first.
-
-- `ALLOW` runs the export.
-- `REVIEW` stops and tells the caller a human must approve. The export does not run.
-- `BLOCK` does not run the export.
-- If Vulnify cannot be reached, `check()` returns `BLOCK` with `degraded=True`. The export does not run.
-
-Set `VULNIFY_API_KEY`. With no `base_url`, this calls `https://api.vulnify.io`. For a local API, set `VULNIFY_BASE_URL=http://localhost:3000` or pass `base_url="http://localhost:3000"`. An explicit `base_url` wins over `VULNIFY_BASE_URL`.
+**3. Ask before the action runs**
 
 ```python
 import os
-import sys
-
 from vulnify import Vulnify
 
+vulnify = Vulnify(api_key=os.environ["VULNIFY_API_KEY"])
 
-def export_customer_records() -> None:
-    """Replace the body with the real export. It runs only after ALLOW."""
-    print("exporting customer records to the external destination")
+decision = vulnify.check(
+    agent="SalesBot",
+    action="EXPORT_DATA",
+    resource="Customer Database",
+    destination="EXTERNAL_EMAIL",
+    records_affected=12000,
+)
 
+outcome = decision.final_decision or decision.decision  # "ALLOW", "REVIEW", or "BLOCK"
+if outcome == "ALLOW":
+    export_customer_records()
+else:
+    print(outcome, decision.risk_score, decision.reasons)
+```
 
-def main() -> None:
-    api_key = os.environ.get("VULNIFY_API_KEY")
-    if not api_key:
-        raise SystemExit("Set VULNIFY_API_KEY")
+Or let `guard()` do the branching. The function runs only on `ALLOW`. Anything else raises `VulnifyBlockedError`:
 
-    # Local API: Vulnify(api_key=api_key, base_url="http://localhost:3000")
-    vulnify = Vulnify(api_key=api_key)
+```python
+from vulnify import VulnifyBlockedError
 
-    decision = vulnify.check(
+try:
+    vulnify.guard(
+        export_customer_records,
         agent="SalesBot",
         action="EXPORT_DATA",
         resource="Customer Database",
         destination="EXTERNAL_EMAIL",
         records_affected=12000,
     )
-
-    if decision.decision == "ALLOW":
-        export_customer_records()
-        return
-
-    reasons = "; ".join(decision.reasons) or "no reason given"
-
-    if decision.decision == "REVIEW":
-        score = "unknown" if decision.risk_score is None else str(decision.risk_score)
-        event_id = decision.id or "none"
-        raise SystemExit(
-            f"A human must approve this export before it runs (event {event_id}, score {score}). {reasons}"
-        )
-
-    if decision.degraded:
-        raise SystemExit(f"Vulnify could not be reached. The export was not run. {reasons}")
-
-    raise SystemExit(f"Export blocked. The export was not run. {reasons}")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as err:
-        print(err, file=sys.stderr)
-        raise SystemExit(1)
+except VulnifyBlockedError as err:
+    print(err.result.decision, err.result.reasons)
 ```
 
-A `REVIEW` is approved on the Vulnify server (Slack, an MFA step-up, or a separate approver). This process does not approve it and does not poll. A separate MCP or HTTP gateway injects secrets only after `ALLOW`.
+`@vulnify.protect(agent=..., action=..., resource=...)` is the same check as a decorator.
 
-`guard(fn, **action)` runs `fn` only when the effective decision is `ALLOW` and raises `VulnifyBlockedError` for `REVIEW` and `BLOCK`. That effective value is `final_decision` when the API sent it, and `decision` otherwise. Pass `wait={"timeout": 300}` only when you mean to poll until a review resolves. `protect(**action)` is the same check as a decorator. Retries reuse the same `Idempotency-Key`, so a retry does not create a second event. `get_event` and `wait_for_review` use those same retries; if the API is still unavailable they raise `VulnifyError` instead of applying `fail_mode`.
+## How it works
 
-## Decisions
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/how-it-works.jpg" alt="An AI agent asks Vulnify before acting. ALLOW: it runs. REVIEW: it waits for a person. BLOCK: it never starts." width="100%">
+</p>
 
-- `ALLOW` — run the action. `risk_score` is 0–100. `reasons` explains the score.
-- `REVIEW` — do not run the action yet. `review["status"]` starts as `PENDING`. Tell the caller a human must approve.
-- `BLOCK` — do not run the action.
+1. Your agent is about to act. Your code calls `check()` (or `guard()`, or an adapter) with the action metadata.
+2. Vulnify evaluates your policies and the risk engine and returns a decision:
+   - **`ALLOW`**: run the action.
+   - **`REVIEW`**: do not run it yet. A person approves or denies it. Poll with `wait_for_review(event_id)`, or pass `wait={"timeout": 300}` to `guard()`.
+   - **`BLOCK`**: do not run it.
+3. Every decision lands in the audit log with its score and reasons.
 
-`decision` is the outcome stored on the event. It does not change when a review is resolved. `final_decision` is the field to obey after a review: `REVIEW` while it is pending, `ALLOW` when a human approves, and `BLOCK` when they deny it or it expires. `get_event` returns the same body as `check()`, including `final_decision`, `quota_exceeded`, `sandbox`, and `lgpd_categories`. An idempotent replay of a decision made before `finalDecision` shipped can omit it (`final_decision is None`). `wait_for_review` and `guard(..., wait=)` then treat review status `APPROVED` as the go signal, and `DENIED` or `EXPIRED` as a block.
+Each decision has a detail view in the dashboard that explains it:
 
-Follow `final_decision` in monitor mode when it is present, otherwise `decision`. An invalid API key, an unknown agent or resource, a rejected payload, or a body the API refuses as too large (`413`) raises `VulnifyError`. The same is true of any other HTTP 4xx except `408` and `429`. `fail_mode="open"` does not swallow those errors and does not retry them.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/block-detail.jpg" alt="Vulnify dashboard: a SalesBot export of 12,000 customer records to an external email, blocked with risk score 100" width="100%">
+</p>
 
-Optional `content` is scanned for sensitive data and is not stored. Matches return on `dlp_findings`.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/allow-detail.jpg" alt="Vulnify dashboard: a SupportBot read of one internal record, allowed with risk score 30" width="100%">
+</p>
 
-## Fail-closed
+### Which field to obey
 
-`fail_mode` defaults to `"closed"`. A timeout, a network error, `408`, `429`, or a `5xx` becomes `decision="BLOCK"`, `degraded=True`, and a reason beginning with `Vulnify unavailable`. The scenario above does not call `export_customer_records()`. Set `fail_mode="open"` only when an outage should let the action through. A `413` or any other non-retryable `4xx` never takes that path.
+| Field | Meaning |
+| --- | --- |
+| `final_decision` | The outcome to obey. `REVIEW` while a review is pending, `ALLOW` after approval, `BLOCK` after denial or expiry. Can be `None` on replays of decisions made before the field shipped; then use `decision`. |
+| `decision` | The outcome stored on the event. It does not change when a review is resolved. |
+| `evaluated_decision` | What full enforcement would decide. Differs from `decision` in monitor mode. |
+| `monitored` | `True` when the agent runs in monitor mode (recorded, not enforced). |
+| `risk_score` / `risk_level` | Integer 0 to 100, and its level. |
+| `reasons` | Why Vulnify decided this. |
+| `policy` | The policy that matched, if any. |
+| `dlp_findings` / `lgpd_categories` | Sensitive-data findings from optional `content`. The content is scanned and not stored. |
+| `review` | Review state; `review["status"]` is `PENDING`, `APPROVED`, `DENIED`, or `EXPIRED`. |
+| `degraded` | `True` when Vulnify was unreachable and `fail_mode` decided. |
+| `quota_exceeded` / `sandbox` | Plan quota flag, and whether this was a TEST-key sandbox event. |
 
-Audit events are hash-chained. SIEM export is JSON or CEF. Evidence in the product maps to LGPD, ISO/IEC 42001, NIST AI RMF, and the EU AI Act. That mapping is not a certification.
+### Monitor mode
 
-## Adapters
+Roll out without blocking anything: in monitor mode the action is allowed and recorded, and the dashboard shows what enforcement would have done.
 
-`vulnify.adapters` is duck-typed and does not import a framework until an adapter needs a type from that package. The core install has no runtime dependencies. Samples are in `examples/`.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/monitor-detail.jpg" alt="Vulnify dashboard in monitor mode: an export that was allowed and recorded, and would have been blocked with enforcement on" width="100%">
+</p>
 
-CrewAI (`guard_crewai_tool`, `crewai_before_tool_call`) and LangGraph (`langgraph_tool_guard`, `alanggraph_tool_guard`) take a `describe` callback that maps tool arguments to `check` keywords. `on_blocked="message"` (the default for tool wrappers) returns Vulnify's reasons to the agent. `"raise"` raises `VulnifyBlockedError`.
+### Audit log
+
+Every decision, including human reviews, is appended to a per-organization SHA-256 hash chain that you can verify from the dashboard. Owners and admins can download recent security events from Compliance as a JSON or CSV file. See [Audit log](https://docs.vulnify.io/concepts/audit-log/).
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/audit-logs.jpg" alt="Vulnify audit log listing decisions by agent, action, resource, destination, risk, and decision" width="100%">
+</p>
+
+## Configuration
+
+```python
+Vulnify(
+    api_key="...",          # required
+    base_url=None,          # defaults to VULNIFY_BASE_URL, then https://api.vulnify.io
+    timeout=3.0,            # seconds per HTTP request
+    fail_mode="closed",     # "closed" blocks when Vulnify is unreachable; "open" allows
+    retries=2,              # retries after the first attempt, for transient failures only
+)
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `api_key` | (required) | Your Vulnify API key. The client does not read it from the environment; pass `os.environ["VULNIFY_API_KEY"]`. |
+| `base_url` | `VULNIFY_BASE_URL`, else `https://api.vulnify.io` | API host. An explicit `base_url` wins over the environment variable. Local API: `http://localhost:3000`. |
+| `timeout` | `3.0` | Timeout in seconds for each HTTP request. |
+| `fail_mode` | `"closed"` | What `check()` returns after retries when Vulnify is unreachable (network error, timeout, `408`, `429`, `5xx`): `"closed"` returns `BLOCK` with `degraded=True`, `"open"` returns `ALLOW` with `degraded=True`. |
+| `retries` | `2` | Extra attempts for network errors, `408`, `429`, and `5xx`, with a short backoff. `check()` reuses the same `Idempotency-Key`, so a retry never creates a second event. |
+
+Any other HTTP 4xx (bad key, unknown agent or resource, invalid or oversized payload) raises `VulnifyError` immediately. It is not retried, and `fail_mode="open"` never turns it into an `ALLOW`.
+
+| Environment variable | Used by | Description |
+| --- | --- | --- |
+| `VULNIFY_BASE_URL` | client, CLI | API host when `base_url` / `--base-url` is not given. |
+| `VULNIFY_API_KEY` | CLI | API key; takes precedence over the stored CLI credentials. In your own code, pass it to `Vulnify(api_key=...)`. |
+
+### `check()` arguments
+
+| Argument | Description |
+| --- | --- |
+| `action` | `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA`, or `SEND_EMAIL`. Required. |
+| `agent` / `agent_id` | Agent name as registered in Vulnify, or its id. One is required unless the API key is bound to an agent. |
+| `resource` / `resource_id` | Resource name as registered in Vulnify, or its id. One is required. |
+| `destination` | `INTERNAL`, `EXTERNAL_EMAIL`, or `EXTERNAL_API`. |
+| `records_affected` | Number of records the action touches. |
+| `content` | Optional text scanned for sensitive data. Scanned in memory and not stored. |
+| `idempotency_key` | Optional. Defaults to a fresh UUID per call. |
+
+Other methods: `get_event(event_id)` reads one decision, and `wait_for_review(event_id, timeout=300.0, poll=2.0)` returns `ALLOW`, `BLOCK`, or `TIMEOUT` (or `APPROVED`, `DENIED`, `EXPIRED` for older decisions without `final_decision`).
+
+## Framework integrations
+
+`vulnify.adapters` wraps your tools so they run only on `ALLOW`. Adapters are duck-typed and import a framework only when they need one of its types, so the core install stays dependency-free. Each adapter takes a `describe` callback that turns the tool's arguments into `check()` keywords:
+
+```python
+def describe_export(args):
+    return {
+        "agent": "SalesBot",
+        "action": "EXPORT_DATA",
+        "resource": "Customer Database",
+        "records_affected": args.get("rows"),
+    }
+```
+
+| Framework | Install | Adapter |
+| --- | --- | --- |
+| LangChain | `pip install "vulnify[langchain]"` | `guard_langchain_tool(vulnify, tool, describe)` |
+| LangGraph | `pip install langgraph` | `langgraph_tool_guard(vulnify, {"tool_name": describe})`, async: `alanggraph_tool_guard` |
+| OpenAI Agents | `pip install "vulnify[openai-agents]"` | `guard_openai_agents_tool(vulnify, tool, describe)` |
+| MCP server | `pip install "vulnify[mcp]"` | `guard_mcp_handler(vulnify, describe, handler)` |
+| MCP client | `pip install "vulnify[mcp]"` | `guard_mcp_client(vulnify, session, {"tool_name": describe})` |
+| CrewAI | `pip install crewai` | `guard_crewai_tool(vulnify, tool, describe)`, hook: `crewai_before_tool_call` |
+
+The framework extras require Python 3.10+. A blocked tool answers the agent with Vulnify's reasons instead of running; pass `on_blocked="raise"` to the tool wrappers (LangChain, OpenAI Agents, CrewAI) to raise `VulnifyBlockedError` instead. MCP adapters return an MCP error result. All adapters accept `wait={"timeout": 300}` to wait for a human review. Runnable samples are in [`examples/`](https://github.com/vulnify/vulnify-sdk-python/tree/main/examples).
 
 ### LangChain
 
-```bash
-pip install 'vulnify[langchain]'
-```
-
-`guard_langchain_tool` guards `_run` / `_arun` on a `BaseTool`, so `invoke` checks once. A tool that only has `invoke` or `call` is guarded on those methods.
-
 ```python
+from langchain_core.tools import tool
 from vulnify.adapters import guard_langchain_tool
 
-export_tool = guard_langchain_tool(vulnify, export_tool, describe_export)
+@tool
+def export_customers(rows: int) -> str:
+    """Export customer records."""
+    return f"exported {rows}"
+
+export_customers = guard_langchain_tool(vulnify, export_customers, describe_export)
+export_customers.invoke({"rows": 3})
 ```
+
+### LangGraph
+
+```python
+from langgraph.prebuilt import ToolNode
+from vulnify.adapters import langgraph_tool_guard
+
+node = ToolNode(tools, wrap_tool_call=langgraph_tool_guard(vulnify, {"export_customers": describe_export}))
+```
+
+A call that is not allowed returns an error `ToolMessage` with the reasons, so the model sees why. Tools not in the map run unchanged.
 
 ### OpenAI Agents
 
-```bash
-pip install 'vulnify[openai-agents]'
-```
-
-`guard_openai_agents_tool` wraps a Python `FunctionTool`. `describe` sees the parsed JSON arguments. The model receives the block text instead of the tool running. `on_blocked="raise"` rethrows.
-
 ```python
 from agents import function_tool
-
 from vulnify.adapters import guard_openai_agents_tool
 
 @function_tool
@@ -150,91 +254,108 @@ export_customers = guard_openai_agents_tool(vulnify, export_customers, describe_
 
 ### MCP
 
-```bash
-pip install 'vulnify[mcp]'
-```
-
-`guard_mcp_handler` wraps a tool function before you register it on `MCPServer` (mcp 2; the older name was FastMCP). `guard_mcp_client` wraps `session.call_tool`. A blocked call returns an MCP error result (`CallToolResult` when `mcp` is installed) and does not raise `VulnifyBlockedError`. Tools omitted from the client `describe` map are forwarded unchanged.
-
 ```python
-from mcp.server import MCPServer
-
 from vulnify.adapters import guard_mcp_client, guard_mcp_handler
 
+# Inside your MCP server: register the wrapped function.
 async def export_customers(rows: int) -> str:
     """Export customer records."""
     return f"exported {rows}"
 
-server = MCPServer("sales")
 server.tool()(guard_mcp_handler(vulnify, describe_export, export_customers))
 
+# In an MCP client: check listed tools before the request is sent.
 session = guard_mcp_client(vulnify, session, {"export_customers": describe_export})
 ```
 
-A `REVIEW` uses `final_decision` on every adapter: `ALLOW` runs the tool, and `BLOCK` does not.
-
-The npm SDK also ships a Vercel AI SDK helper. That framework has no Python counterpart, so this package does not include it.
-
 ## Webhooks
 
-Vulnify signs each delivery with HMAC-SHA256. The key is the endpoint secret as UTF-8, including the `whsec_` prefix. It is not base64-decoded. The signed message is the unix timestamp, a dot, and the raw body bytes. `X-Vulnify-Signature` looks like `t=<unix seconds>,v1=<hex>`. During a secret rotation the header can carry more than one `v1`; any match is enough. A timestamp exactly 300 seconds off is still valid. Pass the raw body, not JSON you parsed and dumped again.
-
-`X-Vulnify-Delivery` is the delivery id (`event.id`). Dedupe retries on it. `X-Vulnify-Attempt` starts at 1. `X-Vulnify-Event` is the primary type and matches `event.type`. Those three headers are not signed. Trust the body after the signature check.
+Vulnify can POST decision, anomaly, and test deliveries to an endpoint you register. Each delivery is signed with HMAC-SHA256 in the `X-Vulnify-Signature` header (`t=<unix seconds>,v1=<hex>`), keyed with your `whsec_` endpoint secret. Verify and parse it with one call, passing the **raw** request body:
 
 ```python
+from flask import Flask, request
 from vulnify import WebhookVerificationError, construct_webhook_from_request
 
-try:
-    event = construct_webhook_from_request(secret, headers, raw_body)
-except WebhookVerificationError:
-    return 400  # 408, 429, and 5xx are retried; any other 4xx stops them
+app = Flask(__name__)
 
-# event.id is the delivery id. event.event_id is the security event, anomaly, or test id.
-if event.type in ("BLOCK", "REVIEW", "CRITICAL"):
-    obey = event.data.final_decision  # ALLOW, REVIEW, or BLOCK
+@app.post("/webhooks/vulnify")
+def vulnify_webhook():
+    try:
+        event = construct_webhook_from_request(SECRET, request.headers, request.get_data())
+    except WebhookVerificationError:
+        return "", 400
+    # event.id is the delivery id (dedupe retries on it); event.event_id is the event.
+    if event.type == "BLOCK":
+        print("blocked", event.event_id, event.data.final_decision)
+    return "", 204
 ```
 
-`verify_webhook_signature(secret, signature_header, raw_body)` only checks the signature and raises `WebhookVerificationError`. `parse_webhook(raw_body)` returns a `DecisionWebhook`, `AnomalyWebhook`, or `TestWebhook`. `construct_webhook` does both. `decision` on a decision payload is what was stored. `final_decision` is the outcome to obey.
+| Function | What it does |
+| --- | --- |
+| `construct_webhook_from_request(secret, headers, raw_body)` | Reads the signature header (case-insensitive), verifies, and parses. |
+| `construct_webhook(secret, signature_header, raw_body)` | Verifies, then parses. |
+| `verify_webhook_signature(secret, signature_header, raw_body)` | Verifies only. Raises `WebhookVerificationError`. Default tolerance is 300 seconds. |
+| `parse_webhook(raw_body)` | Parses only, into `DecisionWebhook`, `AnomalyWebhook`, or `TestWebhook`. |
 
-Flask uses `request.get_data()`, FastAPI uses `await request.body()`, and Django uses `request.body`. Short samples are in `examples/flask_webhook.py`, `examples/fastapi_webhook.py`, and `examples/django_webhook.py`.
+Read the raw body with `request.get_data()` (Flask), `await request.body()` (FastAPI), or `request.body` (Django). Do not re-serialize parsed JSON. Samples: [Flask](https://github.com/vulnify/vulnify-sdk-python/blob/main/examples/flask_webhook.py), [FastAPI](https://github.com/vulnify/vulnify-sdk-python/blob/main/examples/fastapi_webhook.py), [Django](https://github.com/vulnify/vulnify-sdk-python/blob/main/examples/django_webhook.py). Delivery format: [Webhook deliveries](https://docs.vulnify.io/api/webhooks/).
 
 ## CLI
 
-`pip install "vulnify[cli]"` adds the `vulnify` command. It is the same command set as the npm CLI: `init`, `login`, `check`, `policies validate`, `policies pull`, `policies apply`, and `test`. There is no telemetry.
-
-Credentials are written to `~/.config/vulnify/credentials.json` with mode 0600. `VULNIFY_API_KEY` and `VULNIFY_BASE_URL` override that file. The default base URL is `https://api.vulnify.io`.
-
-| Exit code | Meaning |
-| --- | --- |
-| 0 | Success, or `ALLOW` from `check` |
-| 1 | Validation error, test failure, or another command failure |
-| 2 | `REVIEW` from `check` |
-| 3 | `BLOCK` from `check` |
-| 4 | This server has no policies-as-code API yet |
-| 5 | Authentication error |
+Policies as code and one-off decisions from the terminal. Same commands as the npm CLI.
 
 ```bash
-vulnify init
+pip install "vulnify[cli]"
+
+vulnify init                      # writes vulnify/policies/example.yaml and a test file
 vulnify login --api-key "$VULNIFY_API_KEY"
-vulnify check --agent support-bot --action EXPORT_DATA --resource customers-db --records 5000
-vulnify policies validate
+vulnify check --agent SalesBot --action EXPORT_DATA --resource "Customer Database" --records 12000
+vulnify policies validate         # offline schema check with file:line errors
 vulnify policies pull --out vulnify/policies
 vulnify policies apply --dry-run
-vulnify policies apply --prune
 vulnify test --local
 ```
 
-Every command accepts `--json`. `vulnify --version` prints the package version. `check` prints a warning on stderr when the key starts with `vln_live_`, because that call records a real event. `--destination` and `--records` map to the decision API. `--sensitive` is accepted so the flags match the npm CLI; the decision API has no boolean for it, and the CLI warns that the flag is not sent. `check` exits from `finalDecision` when the API sends it, and from `decision` otherwise. An unreachable API is exit 1 (`failMode=closed`), not exit 3.
+Every command accepts `--json`. There is no telemetry. Credentials are stored in `~/.config/vulnify/credentials.json` (mode 0600); `VULNIFY_API_KEY` and `VULNIFY_BASE_URL` take precedence.
 
-`login` checks the key with `GET /v1/events/00000000-0000-4000-8000-000000000000`. HTTP 200, 403, or 404 means the key was accepted. HTTP 401 is exit 5. A 404 whose message starts with `Cannot GET` means that base URL has no decision API and is exit 1. The credentials directory is mode 0700.
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success, or `ALLOW` from `check` |
+| `1` | Validation error, test failure, or another failure |
+| `2` | `REVIEW` from `check` |
+| `3` | `BLOCK` from `check` |
+| `4` | This server has no policies-as-code API yet |
+| `5` | Authentication error |
 
-`policies pull`, `policies apply`, and `test` call `/v1/policies`, `/v1/policies/apply`, and `/v1/policies/test`. A 404 prints exactly `This Vulnify server does not support policies as code yet` and exits 4. Apply with anything other than an org-wide LIVE key is rejected by the API; the CLI exits 5. `pull` writes one file per policy, keeps `metadata.id` and `metadata.updatedAt`, and `apply` does not send those fields back.
+Policy file format: [Policy files](https://docs.vulnify.io/cli/policy-files/). CLI reference: [CLI](https://docs.vulnify.io/cli/).
 
-`init` writes `vulnify/policies/example.yaml`, `vulnify/tests/example.test.yaml`, and `vulnify/.gitignore`, and refuses to overwrite any of them. Several documents may share a file, separated by `---`. `policies validate` is offline and reports `file:line` errors against `vulnify/schema/policies.v1.json`, which is a byte-identical copy of `schema/policies.v1.json` from the npm SDK.
+## Vulnify MCP server
 
-A policy `action` is the action family: `ANY`, `READ`, `WRITE`, `DELETE`, or `EXPORT`. `resource` is a resource type (`ANY`, `PUBLIC`, `INTERNAL`, `SENSITIVE`, `CUSTOMER_PII`, `FINANCIAL`, `EMPLOYEE`) or null. A condition uses the dashboard fields: `minRecords` and `maxRecords` are inclusive bounds on `recordsAffected` (`minRecords: 1001` is more than 1000 records), plus `destination` (`EXTERNAL` or `INTERNAL`), `destinationContains`, `containsSensitiveData`, `minRiskScore`, `outsideBusinessHours`, `agentIds`, and grouped `allOf` / `anyOf`. `kind: PolicyTest` cases use the event action (`EXPORT_DATA` and the rest) and a resource name.
+Vulnify also runs a hosted MCP server for MCP clients that connect to Vulnify directly. It is a remote endpoint:
 
-`vulnify test --local` sends the cases plus the Policy documents in `vulnify/policies`. Without `--local`, only the cases are sent. `pass: true` is PASS, `pass: null` is SKIP, and any other `pass` value is FAIL. The exit code is 1 when any case fails.
+```text
+https://mcp.vulnify.io/mcp
+```
+
+Authenticate with your Vulnify API key as `Authorization: Bearer <key>` (or `X-Vulnify-Key: <key>`).
+
+This is different from two other MCP features:
+
+- The **MCP gateway** (`POST /v1/gateway/mcp` on the API) decides an MCP tool call that your caller sends to Vulnify. See [MCP gateway](https://docs.vulnify.io/api/gateway-mcp/).
+- The **MCP adapters** in this SDK (`guard_mcp_handler`, `guard_mcp_client`) guard tools inside your own MCP server or client. See [MCP](#mcp) above.
+
+## Plans and pricing
+
+The SDK is MIT-licensed. Usage limits, retention, and features depend on your Vulnify plan. See [vulnify.io/pricing](https://vulnify.io/pricing).
+
+## Support
+
+- Docs: [docs.vulnify.io](https://docs.vulnify.io)
+- Bugs and feature requests: [GitHub issues](https://github.com/vulnify/vulnify-sdk-python/issues)
+- Product support and billing: [hello@vulnify.io](mailto:hello@vulnify.io) ([Support](https://docs.vulnify.io/support/))
+
+## Security
+
+Please report vulnerabilities privately to [security@vulnify.io](mailto:security@vulnify.io), not in a public issue. See [Security and compliance](https://docs.vulnify.io/security/) for what Vulnify stores and how.
 
 ## Development
 
@@ -245,4 +366,4 @@ pytest
 
 ## License
 
-MIT. Copyright 2026 Vulnify.
+[MIT](https://github.com/vulnify/vulnify-sdk-python/blob/main/LICENSE). Copyright 2026 Vulnify.

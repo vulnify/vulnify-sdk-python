@@ -161,7 +161,7 @@ class CliTests(unittest.TestCase):
 
         code, out, _err = self.run_cli(["--version"])
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "0.4.0")
+        self.assertEqual(out.strip(), "0.4.1")
 
         code, out, _err = self.run_cli([])
         self.assertEqual(code, 1)
