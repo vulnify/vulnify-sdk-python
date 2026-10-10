@@ -39,7 +39,7 @@ class WebhookPayloadError(Exception):
 
 @dataclass(frozen=True)
 class WebhookDecisionData:
-    """Decision payload. ``decision`` is stored on the event. ``final_decision`` is the outcome to obey."""
+    """Decision payload. ``decision`` is stored on the event. ``final_decision`` is the authoritative result."""
 
     id: str
     agent: str

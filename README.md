@@ -21,7 +21,7 @@
 <p align="center">
   <a href="https://docs.vulnify.io/sdks/python/"><strong>Docs</strong></a> ·
   <a href="https://app.vulnify.io"><strong>Dashboard</strong></a> ·
-  <a href="https://github.com/vulnify/vulnify-sdk-python#vulnify-mcp-server"><strong>MCP</strong></a> ·
+  <a href="https://docs.vulnify.io/mcp/"><strong>MCP</strong></a> ·
   <a href="https://github.com/vulnify/vulnify-sdk-python/blob/main/CHANGELOG.md"><strong>Changelog</strong></a>
 </p>
 
@@ -114,11 +114,11 @@ Each decision has a detail view in the dashboard that explains it:
   <img src="https://raw.githubusercontent.com/vulnify/vulnify-sdk-python/main/docs/assets/allow-detail.jpg" alt="Vulnify dashboard: a SupportBot read of one internal record, allowed with risk score 30" width="100%">
 </p>
 
-### Which field to obey
+### Which field is authoritative
 
 | Field | Meaning |
 | --- | --- |
-| `final_decision` | The outcome to obey. `REVIEW` while a review is pending, `ALLOW` after approval, `BLOCK` after denial or expiry. Can be `None` on replays of decisions made before the field shipped; then use `decision`. |
+| `final_decision` | The authoritative result. `REVIEW` while a review is pending, `ALLOW` after approval, `BLOCK` after denial or expiry. Can be `None` on replays of decisions made before the field shipped; then use `decision`. |
 | `decision` | The outcome stored on the event. It does not change when a review is resolved. |
 | `evaluated_decision` | What full enforcement would decide. Differs from `decision` in monitor mode. |
 | `monitored` | `True` when the agent runs in monitor mode (recorded, not enforced). |
@@ -330,17 +330,21 @@ Policy file format: [Policy files](https://docs.vulnify.io/cli/policy-files/). C
 
 ## Vulnify MCP server
 
-Vulnify also runs a hosted MCP server for MCP clients that connect to Vulnify directly. It is a remote endpoint:
+The [Vulnify MCP server](https://docs.vulnify.io/mcp/) gives AI assistants and IDEs tools to check an action, read a decision, and test policies. Cursor, Claude, Grok, or your own code connect to it. It does not run your agent's tools, and it does not sit between the agent and another MCP server.
 
-```text
-https://mcp.vulnify.io/mcp
+The recommended path is **Sign in with Vulnify** (OAuth 2.1). The hosted server is `https://mcp.vulnify.io/mcp`. Add that URL in the client and leave the API-key and OAuth client fields empty. It speaks Streamable HTTP and keeps no session. After you allow access, the server offers five tools: `decide_action`, `get_decision`, `list_policies`, `check_action`, and `test_policies`. It has no approve tool and no deny tool. A person resolves a `REVIEW` in Vulnify.
+
+Use an API key when you need `plan_policy_changes` or `check_mcp_tool_call`, when the client cannot open a browser, or when the key has an IP allowlist. The local process is `@vulnify/mcp` 0.1.2. It needs Node.js 20 or newer, reads `VULNIFY_API_KEY`, and does not open the OAuth consent page:
+
+```bash
+npx -y @vulnify/mcp
 ```
 
-Authenticate with your Vulnify API key as `Authorization: Bearer <key>` (or `X-Vulnify-Key: <key>`).
+On the hosted server, send the same key on every request as `Authorization: Bearer <api key>` or `X-Vulnify-Key: <api key>`. An API-key session lists all seven tools.
 
 This is different from two other MCP features:
 
-- The **MCP gateway** (`POST /v1/gateway/mcp` on the API) decides an MCP tool call that your caller sends to Vulnify. See [MCP gateway](https://docs.vulnify.io/api/gateway-mcp/).
+- The **MCP gateway** (`POST /v1/gateway/mcp` on the API) decides an agent's MCP tool call and, when the decision allows it, forwards the call to a registered upstream MCP server. See [MCP gateway](https://docs.vulnify.io/api/gateway-mcp/).
 - The **MCP adapters** in this SDK (`guard_mcp_handler`, `guard_mcp_client`) guard tools inside your own MCP server or client. See [MCP](#mcp) above.
 
 ## Plans and pricing

@@ -43,7 +43,7 @@ class Decision:
     ``decision`` is the outcome stored on the event (``ALLOW``, ``REVIEW``, or ``BLOCK``).
     It does not change when a human resolves a review.
 
-    ``final_decision`` is the outcome to obey. It matches ``decision`` when there is no
+    ``final_decision`` is the authoritative result. It matches ``decision`` when there is no
     review. While a review is pending it is ``REVIEW``. Approval sets it to ``ALLOW``.
     Denial or expiry sets it to ``BLOCK``. Idempotent replays of decisions made before
     that field shipped may omit it; then it is ``None``, and a review is approved only
@@ -211,8 +211,8 @@ class Vulnify:
         """Read one event. The body matches check(), including final_decision.
 
         Retries transient failures the same way as check(). When retries are exhausted,
-        raises VulnifyError. Does not apply fail_mode. After a review, obey
-        ``final_decision`` (ALLOW, BLOCK, or still REVIEW).
+        raises VulnifyError. Does not apply fail_mode. After a review,
+        ``final_decision`` is the authoritative result (ALLOW, BLOCK, or still REVIEW).
         """
         try:
             body = self._with_retries("GET", f"/v1/events/{event_id}")

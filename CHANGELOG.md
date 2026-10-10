@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- README and PyPI page updates (MCP docs and npx, security contact, export wording, finalDecision wording), with no behavior changes.
+
 ## 0.4.1
 
 - README and PyPI page refresh, no code changes. Screenshots live in `docs/assets/` and are not in the sdist or wheel.

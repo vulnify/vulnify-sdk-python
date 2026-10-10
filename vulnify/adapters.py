@@ -6,7 +6,7 @@ or the MCP SDK, so it works with whichever version you use. Install a framework 
 core install stays dependency-free. Every adapter takes a ``describe`` callable that maps the tool's
 arguments to the keyword arguments of :meth:`Vulnify.check` (agent, action, resource, destination,
 records_affected, content, ...). Checks go through :meth:`Vulnify.guard`, so ``final_decision`` is the
-outcome that allows or blocks a call.
+authoritative result.
 
 The npm SDK's Vercel AI SDK helper has no Python counterpart and is not included.
 """

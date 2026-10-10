@@ -21,7 +21,7 @@ def vulnify_webhook():
         event = construct_webhook_from_request(SECRET, request.headers, request.get_data())
     except WebhookVerificationError:
         return "", 400
-    # event.id is the delivery id. Dedupe retries on it. Obey event.data.final_decision for a decision.
+    # event.id is the delivery id. Dedupe retries on it. event.data.final_decision is the authoritative result.
     if event.type == "BLOCK":
         app.logger.info("blocked %s", event.event_id)
     return "", 204
